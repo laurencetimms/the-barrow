@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/terrain" },
+    { "path": "packages/terrain-viewer" },
+    { "path": "packages/voice" },
+    { "path": "packages/voice-tester" },
+    { "path": "packages/game" }
+  ]
+}

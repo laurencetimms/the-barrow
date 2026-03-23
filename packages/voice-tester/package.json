@@ -1,0 +1,13 @@
+{
+  "name": "@the-barrow/voice-tester",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build"
+  },
+  "dependencies": {
+    "@the-barrow/voice": "*"
+  }
+}

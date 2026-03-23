@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Barrow — Terrain</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap');
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #1c1a17;
+      color: #c4b9a8;
+      font-family: 'EB Garamond', Georgia, serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px;
+    }
+
+    h1 {
+      font-size: 15px;
+      font-weight: 500;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #7a7268;
+      margin-bottom: 4px;
+    }
+
+    .subtitle {
+      font-size: 13px;
+      color: #4a453e;
+      font-style: italic;
+      margin-bottom: 20px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .controls label { font-size: 13px; color: #7a7268; }
+
+    .controls input[type="text"] {
+      background: #2a2620;
+      border: 1px solid #3a3630;
+      color: #c4b9a8;
+      padding: 4px 8px;
+      font-family: inherit;
+      font-size: 13px;
+      width: 120px;
+      border-radius: 3px;
+    }
+
+    .controls button {
+      background: #2e2a22;
+      border: 1px solid #5a5040;
+      color: #b8a88a;
+      padding: 5px 14px;
+      font-family: inherit;
+      font-size: 13px;
+      cursor: pointer;
+      border-radius: 3px;
+      transition: background 0.2s;
+    }
+
+    .controls button:hover { background: #3e3a32; }
+
+    .toggle-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: #7a7268;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .toggle-label input[type="checkbox"] {
+      accent-color: #6a8a50;
+      cursor: pointer;
+    }
+
+    .world-stats {
+      font-size: 12px;
+      color: #7a7268;
+      background: #1f1d19;
+      border: 1px solid #2a2620;
+      border-radius: 3px;
+      padding: 6px 14px;
+      margin-bottom: 14px;
+      text-align: center;
+      min-width: 300px;
+      line-height: 1.7;
+    }
+
+    .world-stats:empty { display: none; }
+
+    /* Map row: canvas on the left, key panel on the right */
+    .map-row {
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+    }
+
+    .map-area {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    canvas {
+      border: 1px solid #2a2620;
+      display: block;
+      max-width: 100%;
+      height: auto;
+    }
+
+    .cursor-info {
+      margin-top: 10px;
+      font-size: 13px;
+      color: #8a8078;
+      text-align: center;
+      min-height: 18px;
+      max-width: 600px;
+    }
+
+    .zoom-info {
+      margin-top: 4px;
+      font-size: 11px;
+      color: #5a5248;
+      text-align: center;
+      line-height: 1.6;
+      min-height: 34px;
+    }
+
+    /* Key panel — three side-by-side columns */
+    .key-panel {
+      display: flex;
+      flex-direction: row;
+      gap: 16px;
+      align-items: flex-start;
+      max-height: 600px;
+      overflow-y: auto;
+      background: #1f1d19;
+      border: 1px solid #2a2620;
+      border-radius: 3px;
+      padding: 10px 12px;
+      flex-shrink: 0;
+    }
+
+    .key-panel.hidden { display: none; }
+
+    .key-col {
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    .key-section-title {
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: #5a5248;
+      margin-bottom: 8px;
+      padding-bottom: 5px;
+      border-bottom: 1px solid #2a2620;
+    }
+
+    .key-geo-item {
+      display: flex;
+      gap: 7px;
+      margin-bottom: 8px;
+      align-items: flex-start;
+    }
+
+    .key-geo-swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 2px;
+      border: 1px solid #3a3630;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .key-geo-name {
+      display: block;
+      font-size: 12px;
+      color: #9a9088;
+      margin-bottom: 2px;
+      line-height: 1.2;
+    }
+
+    .key-geo-desc {
+      display: block;
+      font-size: 10.5px;
+      color: #3e3a34;
+      font-style: italic;
+      line-height: 1.4;
+    }
+
+    .key-veg-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 7px;
+      margin-bottom: 5px;
+    }
+
+    .key-veg-swatch {
+      width: 11px;
+      height: 11px;
+      border-radius: 2px;
+      border: 1px solid rgba(255,255,255,0.06);
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .key-veg-label {
+      font-size: 11px;
+      color: #5e5a54;
+      line-height: 1.35;
+    }
+
+    .key-hab-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 5px;
+    }
+
+    .key-hab-swatch {
+      width: 10px;
+      height: 10px;
+      flex-shrink: 0;
+    }
+
+    .key-hab-label {
+      font-size: 11px;
+      color: #5e5a54;
+      line-height: 1.35;
+      white-space: nowrap;
+    }
+
+    .info {
+      margin-top: 14px;
+      font-size: 12px;
+      color: #3e3a34;
+      font-style: italic;
+      text-align: center;
+      max-width: 640px;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+  <h1>The Barrow — Terrain Generator</h1>
+  <p class="subtitle">The rock beneath the world</p>
+
+  <div class="controls">
+    <label for="seed">Seed:</label>
+    <input type="text" id="seed" value="barrow" />
+    <button id="generate">Generate</button>
+    <button id="random">Random Seed</button>
+    <label class="toggle-label">
+      <input type="checkbox" id="vegetation" />
+      Vegetation
+    </label>
+    <label class="toggle-label">
+      <input type="checkbox" id="show-key" checked />
+      Key
+    </label>
+  </div>
+
+  <div id="world-stats" class="world-stats"></div>
+
+  <div class="map-row">
+    <div class="map-area">
+      <canvas id="terrain"></canvas>
+      <div class="cursor-info" id="cursor-info"></div>
+      <div class="zoom-info" id="zoom-info"></div>
+    </div>
+    <div class="key-panel" id="key-panel"></div>
+  </div>
+
+  <p class="info">
+    Each coarse cell ≈ 1 mile. South at the bottom, north at the top.
+    Scroll to zoom · Drag to pan · Press 0 to reset view · Hover to inspect geology.
+  </p>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

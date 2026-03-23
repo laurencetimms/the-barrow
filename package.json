@@ -1,0 +1,20 @@
+{
+  "name": "the-barrow",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:terrain-viewer": "npm run dev -w @the-barrow/terrain-viewer",
+    "dev:voice-tester": "npm run dev -w @the-barrow/voice-tester",
+    "dev:game": "npm run dev -w @the-barrow/game",
+    "build": "npm run build -w @the-barrow/terrain-viewer && npm run build -w @the-barrow/voice-tester && npm run build -w @the-barrow/game",
+    "build:game": "npm run build -w @the-barrow/game",
+    "build:terrain-viewer": "npm run build -w @the-barrow/terrain-viewer",
+    "build:voice-tester": "npm run build -w @the-barrow/voice-tester"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vite": "^5.4.0"
+  }
+}

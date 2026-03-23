@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Barrow — Voice</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap');
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #1c1a17;
+      color: #c4b9a8;
+      font-family: 'EB Garamond', Georgia, serif;
+      min-height: 100vh;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 20px 24px 12px;
+      border-bottom: 1px solid #2a2620;
+    }
+
+    header h1 {
+      font-size: 15px;
+      font-weight: 500;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #7a7268;
+      margin-bottom: 3px;
+    }
+
+    header .subtitle {
+      font-size: 13px;
+      color: #4a453e;
+      font-style: italic;
+    }
+
+    .app {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    /* --- Left panel: situation controls --- */
+    .situation-panel {
+      width: 300px;
+      min-width: 260px;
+      border-right: 1px solid #2a2620;
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .control-group label {
+      display: block;
+      font-size: 12px;
+      color: #7a7268;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 5px;
+    }
+
+    .tag-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    .tag-btn {
+      background: #2a2620;
+      border: 1px solid #3a3630;
+      color: #8a8078;
+      padding: 7px 10px;
+      font-family: inherit;
+      font-size: 13px;
+      cursor: pointer;
+      border-radius: 3px;
+      transition: all 0.15s;
+      min-height: 36px;
+      touch-action: manipulation;
+    }
+
+    .tag-btn:hover {
+      background: #3a3630;
+      color: #b8a88a;
+    }
+
+    .tag-btn.active {
+      background: #3e3428;
+      border-color: #6a5a40;
+      color: #d4c4a0;
+    }
+
+    .generate-btn {
+      background: #2e2a22;
+      border: 1px solid #5a5040;
+      color: #b8a88a;
+      padding: 12px 16px;
+      font-family: inherit;
+      font-size: 15px;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background 0.2s;
+      margin-top: 8px;
+      width: 100%;
+      min-height: 44px;
+      touch-action: manipulation;
+    }
+
+    .generate-btn:hover { background: #3e3a32; }
+    .generate-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* --- Centre panel: voice output --- */
+    .voice-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .voice-output {
+      flex: 1;
+      padding: 32px 40px;
+      overflow-y: auto;
+    }
+
+    .voice-text {
+      font-size: 19px;
+      line-height: 1.7;
+      color: #d4caba;
+      max-width: 580px;
+      min-height: 80px;
+    }
+
+    .voice-text.empty {
+      color: #4a453e;
+      font-style: italic;
+      font-size: 15px;
+    }
+
+    .voice-meta {
+      padding: 16px 40px;
+      border-top: 1px solid #2a2620;
+      font-size: 12px;
+      color: #5a5248;
+    }
+
+    .voice-meta summary {
+      cursor: pointer;
+      color: #7a7268;
+      margin-bottom: 6px;
+    }
+
+    .fragments-used {
+      margin-top: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .fragment-card {
+      background: #222018;
+      border: 1px solid #2e2a22;
+      border-radius: 4px;
+      padding: 8px 12px;
+    }
+
+    .fragment-card .frag-text {
+      font-style: italic;
+      color: #9a9080;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .fragment-card .frag-tags {
+      margin-top: 4px;
+      font-size: 11px;
+      color: #5a5248;
+    }
+
+    /* --- Right panel: fragment editor --- */
+    .editor-panel {
+      width: 340px;
+      min-width: 280px;
+      border-left: 1px solid #2a2620;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .editor-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid #2a2620;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .editor-header h2 {
+      font-size: 13px;
+      font-weight: 500;
+      color: #7a7268;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .editor-count {
+      font-size: 12px;
+      color: #5a5248;
+    }
+
+    .editor-tabs {
+      display: flex;
+      border-bottom: 1px solid #2a2620;
+    }
+
+    .editor-tab {
+      flex: 1;
+      padding: 10px 8px;
+      text-align: center;
+      font-size: 13px;
+      color: #5a5248;
+      cursor: pointer;
+      border: none;
+      background: none;
+      font-family: inherit;
+      border-bottom: 2px solid transparent;
+      min-height: 44px;
+      touch-action: manipulation;
+    }
+
+    .editor-tab.active {
+      color: #b8a88a;
+      border-bottom-color: #6a5a40;
+    }
+
+    .editor-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px;
+    }
+
+    /* Add fragment form */
+    .add-form { display: flex; flex-direction: column; gap: 10px; }
+
+    .add-form textarea {
+      background: #222018;
+      border: 1px solid #3a3630;
+      color: #c4b9a8;
+      padding: 8px;
+      font-family: inherit;
+      font-size: 14px;
+      line-height: 1.6;
+      border-radius: 4px;
+      resize: vertical;
+      min-height: 80px;
+    }
+
+    .add-form textarea:focus {
+      outline: none;
+      border-color: #6a5a40;
+    }
+
+    .add-form .form-label {
+      font-size: 11px;
+      color: #5a5248;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .mini-tag-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3px;
+    }
+
+    .mini-tag {
+      background: #2a2620;
+      border: 1px solid #3a3630;
+      color: #7a7268;
+      padding: 5px 8px;
+      font-family: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      border-radius: 2px;
+      min-height: 32px;
+      touch-action: manipulation;
+    }
+
+    .mini-tag.active {
+      background: #3e3428;
+      border-color: #6a5a40;
+      color: #d4c4a0;
+    }
+
+    .add-btn {
+      background: #2e2a22;
+      border: 1px solid #5a5040;
+      color: #b8a88a;
+      padding: 10px 14px;
+      font-family: inherit;
+      font-size: 14px;
+      cursor: pointer;
+      border-radius: 3px;
+      min-height: 44px;
+      touch-action: manipulation;
+    }
+
+    .add-btn:hover { background: #3e3a32; }
+
+    /* Fragment list */
+    .fragment-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .frag-list-item {
+      background: #222018;
+      border: 1px solid #2e2a22;
+      border-radius: 3px;
+      padding: 6px 10px;
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: #9a9080;
+      position: relative;
+    }
+
+    .frag-list-item .frag-list-tags {
+      font-size: 10px;
+      color: #4a453e;
+      margin-top: 3px;
+    }
+
+    .frag-delete {
+      position: absolute;
+      top: 4px;
+      right: 6px;
+      background: none;
+      border: none;
+      color: #4a453e;
+      cursor: pointer;
+      font-size: 18px;
+      padding: 6px;
+      line-height: 1;
+      touch-action: manipulation;
+    }
+
+    .frag-delete:hover { color: #8a4040; }
+
+    /* Export */
+    .export-section {
+      padding: 12px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .export-btn {
+      background: #2e2a22;
+      border: 1px solid #3a3630;
+      color: #8a8078;
+      padding: 10px 12px;
+      font-family: inherit;
+      font-size: 13px;
+      cursor: pointer;
+      border-radius: 3px;
+      min-height: 44px;
+      touch-action: manipulation;
+    }
+
+    .export-btn:hover { background: #3e3a32; }
+
+    /* API key */
+    .api-key-section {
+      padding: 12px 16px;
+      border-bottom: 1px solid #2a2620;
+    }
+
+    .api-key-section label {
+      font-size: 11px;
+      color: #5a5248;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .api-key-row {
+      display: flex;
+      gap: 6px;
+    }
+
+    .api-key-input {
+      flex: 1;
+      background: #222018;
+      border: 1px solid #3a3630;
+      color: #c4b9a8;
+      padding: 4px 8px;
+      font-family: monospace;
+      font-size: 11px;
+      border-radius: 3px;
+    }
+
+    .api-key-input:focus { outline: none; border-color: #6a5a40; }
+
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 4px;
+      vertical-align: middle;
+    }
+
+    .status-dot.ok { background: #5a8a50; }
+    .status-dot.missing { background: #6a5040; }
+
+    /* Loading spinner */
+    .loading { color: #5a5248; font-style: italic; font-size: 14px; }
+
+    @media (max-width: 900px) {
+      .app { flex-direction: column; overflow: visible; }
+      .situation-panel, .editor-panel { width: 100%; min-width: auto; border: none; border-bottom: 1px solid #2a2620; }
+      .situation-panel { max-height: none; overflow-y: visible; }
+      .editor-panel { max-height: none; overflow: visible; }
+      .editor-body { overflow-y: visible; max-height: none; }
+      .voice-output { min-height: 180px; }
+      .voice-text { font-size: 17px; }
+      .voice-output { padding: 20px 16px; }
+      .voice-meta { padding: 12px 16px; }
+      .api-key-input { font-size: 14px; padding: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>The Barrow — Voice Tester</h1>
+    <p class="subtitle">Fragment library and voice assembly</p>
+  </header>
+  <div class="app">
+    <div class="situation-panel" id="situation-panel"></div>
+    <div class="voice-panel">
+      <div class="voice-output">
+        <div class="voice-text empty" id="voice-output">
+          Set a situation and press Generate to hear the voice.
+        </div>
+      </div>
+      <div class="voice-meta" id="voice-meta">
+        <details>
+          <summary>Fragments used & prompt</summary>
+          <div class="fragments-used" id="fragments-used"></div>
+        </details>
+      </div>
+    </div>
+    <div class="editor-panel">
+      <div class="api-key-section">
+        <label><span class="status-dot missing" id="api-status"></span>Claude API Key</label>
+        <div class="api-key-row">
+          <input type="password" class="api-key-input" id="api-key" placeholder="sk-ant-..." />
+        </div>
+      </div>
+      <div class="editor-header">
+        <h2>Fragments</h2>
+        <span class="editor-count" id="editor-count">0</span>
+      </div>
+      <div class="editor-tabs">
+        <button class="editor-tab active" data-tab="add">Add</button>
+        <button class="editor-tab" data-tab="browse">Browse</button>
+        <button class="editor-tab" data-tab="export">Export</button>
+      </div>
+      <div class="editor-body" id="editor-body"></div>
+    </div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
