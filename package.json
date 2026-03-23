@@ -8,7 +8,7 @@
     "dev:terrain-viewer": "npm run dev -w @the-barrow/terrain-viewer",
     "dev:voice-tester": "npm run dev -w @the-barrow/voice-tester",
     "dev:game": "npm run dev -w @the-barrow/game",
-    "build": "npm run build -w @the-barrow/terrain-viewer && npm run build -w @the-barrow/voice-tester && npm run build -w @the-barrow/game",
+    "build": "npm run build -w @the-barrow/terrain && npm run build -w @the-barrow/voice && npm run build -w @the-barrow/terrain-viewer && npm run build -w @the-barrow/voice-tester && npm run build -w @the-barrow/game",
     "build:game": "npm run build -w @the-barrow/game",
     "build:terrain-viewer": "npm run build -w @the-barrow/terrain-viewer",
     "build:voice-tester": "npm run build -w @the-barrow/voice-tester"

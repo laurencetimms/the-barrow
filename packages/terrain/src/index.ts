@@ -7,5 +7,28 @@ export type { GeologyInfo } from "./geology";
 export { generateTerrain, generateHighResPatch } from "./terrain";
 export type { TerrainCell, TerrainMap } from "./terrain";
 
-export { generateHabitation } from "./habitation";
-export type { HabitationData, Settlement, SacredSite, Path } from "./habitation";
+export {
+  generateHabitation,
+  computeFoodResources,
+  generateWightTerritories,
+  computeCarryingCapacity,
+  computeSettlements,
+  computePathNetwork,
+  computeSacredSites,
+  computeSeasonalCamps,
+  computeHuntingCircuits,
+  validateHabitation,
+} from "./habitation";
+export type {
+  HabitationData, Settlement, SacredSite, Path,
+  FoodCell, FoodResourceMap, WolfTerritory, BearRange,
+  WightSite, WightData,
+  CarryingCapacity,
+  SettlementSize, ActiveSettlement, AbandonedSettlement, Ford, SettlementData,
+  PathSegment, PathNetwork,
+  MajorSiteType, SignificantSiteType, SmallSiteType,
+  MajorSite, SignificantSite, SmallSite, SacredData,
+  SeasonalCampType, SeasonalCamp, SeasonalData,
+  HuntingWaypoint, HuntingCircuit, HuntingData,
+  ValidationReport,
+} from "./habitation";
