@@ -121,6 +121,60 @@ Each turn, the game evaluates:
 
 Priority order: 1 > 2 > 3 > 4 > 5. If multiple apply (player moved into new geology AND weather changed), the higher-priority mode wins and the lower-priority change is folded into the description.
 
+### 3.4 Travel Sequences
+A travel sequence is initiated when the player chooses a directional movement option rather than an immediate action. Instead of moving one cell and producing a description, the game moves the player cell by cell along the chosen bearing, checking each cell for interrupt conditions. If no interrupt fires, it continues until a maximum distance is reached. Then it produces a compressed travel narrative from the traversed cells and offers new choices.
+Distance per travel sequence. The maximum distance covered in a single travel turn varies with terrain:
+
+Open ground (chalk ridge, moorland, heath): up to 5 cells
+Light forest, scrub, moderate terrain: up to 3 cells
+Dense forest (clay lowlands), steep terrain (slate valleys): up to 2 cells
+Difficult terrain (bog, glacial debris, thick undergrowth): 1-2 cells
+
+These maximums represent roughly thirty minutes to an hour of walking. Time advances proportionally to distance covered.
+Interrupt conditions. The travel sequence stops early — before reaching maximum distance — when the player's route encounters something worth noticing:
+
+Geology type changes
+Altitude band changes by two or more steps (e.g., slope to ridgeline)
+A river crosses the path
+A path junction appears
+A settlement becomes visible (smoke, sounds, clearing)
+A sacred site comes within sight range
+The coast is reached
+The ice edge is reached
+Weather changes during travel
+A time-of-day threshold is crossed (dawn breaks, dusk falls)
+The terrain becomes impassable (water, ice, cliff)
+
+When an interrupt fires, the travel stops at the interrupting cell and triggers the appropriate description mode — full description for a geology change, transition moment for a weather change, and so on. The travel narrative covers the distance up to the interrupt point, and the interrupt event is described separately.
+Travel narrative. The compressed description of a multi-cell journey is assembled from:
+
+One travel fragment appropriate to the terrain traversed (describing the experience of covering ground, not of arriving somewhere)
+One or two sensory observations drawn from the cells traversed (not just the destination)
+Brief notes on anything notable passed during the journey — a stream crossed, a path junction, a change in vegetation, an animal sign
+Total length: 3-4 sentences for a journey of 3-5 cells
+
+The travel narrative has a different quality from place descriptions. Place descriptions are still — they describe where you are. Travel narratives have forward momentum — they describe ground passing under your feet, the landscape changing gradually, observations that come and go. "The ridge runs on. Chalk underfoot, wind on your left, the valley dropping away to the east. You cross a shallow combe where hazel grows in the shelter. The ridge resumes beyond."
+Relationship to attention state. A travel sequence is a distinct mode that sits between full description and movement update:
+
+Full description: triggered when the player arrives somewhere new (after an interrupt or at the start of a session)
+Travel narrative: triggered when the player is covering ground through terrain they're already oriented in
+Movement update: may still be used for very short moves (1 cell) where the context barely changes
+
+The travel narrative replaces what would otherwise be several consecutive movement updates. Instead of five turns of "the ridge continues" with the player clicking "continue north" each time, one travel turn covers the same ground in a single compressed narrative. The result is the same distance covered, the same time elapsed, but a better reading experience.
+Page behaviour during travel. A travel narrative appends to the existing page with a moderate gap (20px), the same as a movement update. If the travel ends with an interrupt that triggers a full description, the page clears as usual. The travel narrative and the subsequent full description feel like a continuous sequence — the journey, then the arrival.
+
+### 3.5 Description Mode Selection (Updated)
+Each turn, the game evaluates:
+
+Has the player been absent for more than two minutes? → Reorientation (clear page)
+Did a travel sequence just end with an interrupt that constitutes a major context change (geology, altitude band by 2+, cave/settlement/sacred site entry)? → Full description (clear page)
+Did the player choose a directional travel option and the context is largely stable? → Travel narrative (append)
+Did the player choose to tarry? → Tarrying observation (append or clear based on timing)
+Did an environmental variable change (weather, time threshold, new feature visible)? → Transition moment (append)
+Did the player make an immediate one-cell move with minimal context change? → Movement update (append)
+
+Priority: 1 > 2 > 3 > 4 > 5 > 6. If a travel sequence triggers an interrupt, both the travel narrative (for the distance covered) and the interrupt description (full or transition) are produced in sequence — the travel narrative first, then the interrupt description below it.
+
 ---
 
 ## 4. Timing and Pace
@@ -297,9 +351,36 @@ Each choice is on its own line. No numbering. No bullet points. Just the text of
 
 Maximum 5-6 choices visible at once. If more are available, the interface selects the most contextually interesting ones (see the choice generator design in the upper layers document).
 
-### 7.2 The Wait Choice
+### 7.2 Choice Types and Intent Levels
+Choices operate at three levels of intent, reflecting how the player engages with movement:
+Immediate actions (one cell, one turn). These are available when the player is at or near something interesting. They represent close engagement with the environment.
 
-"Stay here. Watch. Listen." (or contextual variants: "Wait for dawn." "Rest." "Sit by the fire.") is always available. It is always the last choice in the list. It is always phrased as a complete, quiet sentence — never as a game command.
+"Examine the stone."
+"Cross the ford."
+"Enter the settlement."
+"Approach the cave entrance."
+"Climb the tor."
+
+Immediate actions produce full descriptions or feature-specific descriptions. They are the choices of arrival and investigation.
+Directional travel (multi-cell, variable turns). These are the core movement choices during normal exploration. The player picks a direction and a mode of travel. The game narrates the journey until something interrupts.
+
+"Continue north along the ridge."
+"Follow the river downstream."
+"Descend east into the valley."
+"Head toward the smoke."
+"Push deeper into the trees."
+"Cross the open ground to the south."
+
+Directional choices initiate travel sequences (see section 3.4). The player covers several cells in a single turn, with a compressed travel narrative. The game decides when to stop based on interrupt conditions — the player doesn't need to choose when to stop, because the landscape tells them.
+The phrasing of directional choices should convey the mode of travel, not just the direction. "Follow the river downstream" implies bankside walking. "Push deeper into the trees" implies difficult progress. "Continue along the ridge" implies easy, open walking. The phrasing sets expectations about speed and difficulty.
+Distant intent (goal-directed, future implementation). These become available as the player accumulates knowledge of the landscape — learning about landmarks from word-tellings, seeing features from hilltops, remembering routes from previous visits.
+
+"Head for the stone circle at Brendur."
+"Find the spring the wise woman described."
+"Return to Breca's settlement."
+
+Distant-intent choices initiate pathfinding across multiple districts, narrated as a sequence of travel turns with interrupts. The game finds a plausible route and walks the player along it, stopping at each interesting point. This is a late-game capability that requires the knowledge layer, the path system, and accumulated player experience. It is not implemented in the initial walker.
+The wait choice. Always available, always last. "Stay here. Watch. Listen." This initiates tarrying, not travel.
 
 ### 7.3 Keyboard Interaction
 

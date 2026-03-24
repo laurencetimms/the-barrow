@@ -46,6 +46,11 @@ Both endings return the player to the barrow. Both endings are thresholds. But t
 
 This needs to be developed in detail as a future design topic, particularly: the voice layer's handling of the death experience, the mechanical conditions for Passage, the relationship between the emergence barrow and the ending barrow, and whether the game supports any form of continuation or new-game-plus after either ending.
 
+*Variable-speed movement:* the landscape controls the pacing. When the player chooses a direction, the game doesn't move them one cell and stop. It moves them along their bearing, narrating the journey, until the landscape itself produces a reason to stop — a geology change, a river crossing, a feature sighting, a weather shift. Open, uniform terrain is crossed quickly in a compressed narrative. Dense, difficult, or interesting terrain is traversed slowly with detailed description. The player doesn't choose when to stop. The landscape tells them.
+This decision emerged from playtesting the step-by-step walker. Moving one cell at a time across uniform terrain produces tedious repetition — the player clicks "continue north" five times and reads five samey descriptions. The alternative — letting the player set a distant destination and watch the narration unfold — removes the core verb ("choose where to put your body") and turns the game into a movie. Variable-speed movement with landscape-driven interrupts preserves the core verb while eliminating the tedium. The player still chooses direction and mode of travel. The game still responds to each choice with prose. But the granularity of the interaction adapts to the landscape's interest level.
+The implementation requires: travel fragments (a new fragment category describing traversal rather than place), an interrupt-condition system that checks each traversed cell for reasons to stop, and a travel-narrative generator that compresses multi-cell journeys into 3-4 sentence passages. The choice generator offers directional options ("continue along the ridge", "follow the river") rather than only compass directions, and immediate options ("examine the stone", "cross the ford") when the player is near something interesting.
+Three levels of movement intent are planned: immediate (one cell, at interesting locations), directional (multi-cell travel along a bearing, the default mode), and distant (goal-directed pathfinding to a known landmark, requires accumulated knowledge, future implementation).
+
 ---
 
 ## Topics to Develop
@@ -73,6 +78,9 @@ Subjects identified during design conversations that need their own focused trea
 **The player's body.** A more detailed treatment of the player's physical state — hunger, cold, injury, illness, fatigue, strength, agility — and how it affects what they can do, how fast they travel, and what they experience. This connects to the convergence system and to the survival mechanics.
 
 **Music and sound.** Whether The Barrow has a soundscape beyond text. Ambient sound, music, the sound of wind or water or fire. If so, how it's generated or selected, and how it contributes to atmosphere without contradicting the game's text-primary design.
+
+**Travel fragment authoring.** The fragment library needs a dedicated category of travel fragments — prose that describes the experience of covering ground rather than the experience of being in a place. Travel fragments have forward momentum in their grammar: present-tense verbs of motion, the landscape as something moving past, observations that come and go. These are distinct from terrain fragments (which are still) and observation fragments (which are momentary). The authoring task is to produce enough travel fragments, tagged by geology and terrain type, to sustain hours of directional travel without repetition. Roughly 10-15 travel fragments per geology type, covering different terrains within each geology (ridge-walking, valley-following, river-following, forest-pushing, open-crossing, coast-following).
+
 
 ---
 

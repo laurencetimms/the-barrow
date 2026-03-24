@@ -69,3 +69,18 @@ Always include these constraints in LLM system prompts. The model will drift tow
 - Do not generate voice fragments programmatically
 - No rectangular or axis-aligned geological boundaries
 - Do not show the player information they haven't discovered through gameplay
+- Do not move the player only one cell per turn when they've chosen directional travel — compress uniform terrain into multi-cell travel sequences
+- Do not let the player set a distant destination and auto-travel there without interrupts — the landscape must control when travel stops
+- Do not narrate dramatic incidents or invented encounters during travel sequences — just the experience of walking through the landscape
+
+## The Attention State System
+The game tracks perceptual context (geology, altitude, weather, time, vegetation, nearby features) and compares turn-to-turn to determine description mode:
+
+Full description (3-6 sentences): major context change, page clears
+Travel narrative (3-4 sentences): multi-cell directional travel through stable terrain, appends to page
+Movement update (1-2 sentences): single-cell move, minimal context change, appends to page
+Tarrying observation (1 sentence): player waited, deepening detail, appends or clears based on timing
+Transition moment (1-2 sentences): environmental variable changed (weather, time), appends
+Reorientation (brief): player absent >2min, page clears with reminder
+
+Directional choices ("continue north along the ridge") initiate travel sequences — the game moves the player cell by cell, checking for interrupt conditions (geology change, river crossing, feature sighting, weather shift). If interrupted, travel stops and the appropriate description mode fires. If not interrupted, the player covers 2-5 cells and gets a compressed travel narrative.

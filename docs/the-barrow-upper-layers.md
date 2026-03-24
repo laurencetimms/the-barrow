@@ -363,6 +363,15 @@ Fragments are organised by context and combine multiplicatively.
 
 **Observation.** Things the player notices, filtered by their knowledge state. "Off to the left, a break in the trees where the ground rises to an outcrop." "The herb the wise woman described — you recognise the leaf shape." "A mark on the stone. You've seen this mark before."
 
+**Travel.** Fragments describing the experience of covering ground — forward momentum, distance passing, the landscape changing gradually. These are distinct from terrain fragments (which describe a place) and observation fragments (which note a specific detail). Travel fragments describe traversal.
+They are tagged by geology and sometimes by terrain type (ridge, valley, forest, open ground, river-following, coast-following). They don't need weather or time tags — the assembler combines a travel fragment with separate weather and time observations.
+"The ridge runs on. Chalk underfoot, wind on your left, the valley dropping away to the east."
+"Slow going through the trees. The oaks press close. Every few steps, a branch to push aside."
+"You follow the river bank. The water is brown and steady. Alders lean overhead."
+"Open ground, easy walking. The moor stretches out in every direction, brown and green and brown."
+"The path climbs. Your breath comes harder. The trees thin as the ground rises."
+Travel fragments have forward momentum in their grammar — present tense verbs of motion, the landscape as something you're moving through rather than standing in. "The ridge runs on" rather than "the ridge stretches ahead." "Slow going through the trees" rather than "the trees are dense here."
+
 #### 13.2 Combinatorial Assembly
 
 Fragments combine to produce descriptions. A single moment of gameplay might draw from terrain + weather + season + time of day + sensory detail + site type + observation, assembled into flowing prose. Ten terrain fragments for chalk downland, times ten weather fragments for autumn rain, times ten sensory details, produces a thousand combinations before the LLM adds variation.
@@ -394,6 +403,8 @@ The LLM is a limited and controlled contributor. It serves the voice, not the ot
 **Varies descriptions.** Ensures that even with the same fragment inputs, the output text varies enough to feel fresh across repeated visits to similar situations.
 
 **Generates choices.** Produces the options offered to the player at each decision point, phrased as natural impulses emerging from the situation. The choices are constrained by the current state (what's physically possible, what the player knows, what relationships allow) but the phrasing is the LLM's work.
+
+**Generates travel narratives.** When the player covers multiple cells in a directional travel sequence, the LLM receives: the travel fragment, one or two sensory observations from the traversed cells, any notable features passed, and the terrain context. It assembles a 3-4 sentence compressed journey narrative. The travel narrative should have forward momentum — the sense of ground passing — and should incorporate the sensory observations naturally rather than listing them. The LLM must not over-narrate the journey — no dramatic incidents, no invented encounters, no emotional arc. Just the experience of walking through the landscape, compressed into a paragraph.
 
 #### 14.2 What the LLM Does Not Do
 
@@ -482,6 +493,8 @@ The voice layer generates the choices offered to the player. Choices are the pla
 **Risk choices.** Whether to accept vulnerability. "Cross the ford." "Enter the cave without light." "Drink what she offers." "Stay out in the storm."
 
 **Silence choices.** Always present. "Wait." "Say nothing." "Stay here." These are never wasted options — the tarrying mechanic means that choosing to stay and be present is often the most productive thing the player can do, even though it looks like doing nothing.
+
+**Travel choices.** Where to go and how. "Continue north along the ridge." "Follow the river downstream." "Push deeper into the trees." These are not single-step movements — they initiate multi-cell travel sequences (documented in the interface specification, section 3.4). The game moves the player along the chosen bearing, narrating the journey, until an interrupt condition (terrain change, feature sighting, hazard) stops the travel and returns control to the player. Travel choices include the mode of travel in their phrasing — "follow the river" is different from "head east" even if both go east, because the river-following choice stays on the bank while the heading-east choice crosses open ground. The phrasing sets expectations about speed, difficulty, and what the player might encounter.
 
 ---
 

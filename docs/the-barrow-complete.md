@@ -186,6 +186,14 @@ Weather isn't decoration — it's a force that shapes decisions. Rain pushes you
 
 ---
 
+## The rhythm of travel. 
+
+Movement in The Barrow is not step-by-step across a grid. When the player chooses a direction — "continue north along the ridge" — the game narrates the journey. Open chalk downland might pass in a few sentences covering several miles: the steady ground, the wind, a kestrel tracking overhead, a shallow combe crossed and left behind. Dense clay forest might produce a shorter, harder passage: slow progress, the trees pressing close, every step earned. The narrative compresses uninteresting distance and expands interesting moments, mirroring how good travel writing works.
+The landscape interrupts the journey. The player chose to head north, but the geology changes from chalk to limestone — the game stops, delivers a new description of the shifted terrain, and offers fresh choices. Or smoke appears on the horizon — the game notes it, and a new option appears: head toward the smoke, or continue north. The player didn't ask to stop. The landscape stopped them, because something worth noticing appeared. This is how real walking works — long stretches of steady movement punctuated by moments that demand attention.
+The result is a reading experience where distance is felt but not tedious, where arrival is earned but not arbitrary, and where the landscape itself drives the pacing. A ten-mile crossing of empty moorland is one turn and four sentences. The moment the standing stone appears on the ridge ahead, everything slows down.
+
+---
+
 ## Tarrying
 
 Most games treat standing still as wasted time. In The Barrow, attention is the primary currency.
