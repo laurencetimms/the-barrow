@@ -18,24 +18,50 @@ import { generateChoices, Choice } from "./choices";
 import { buildContext, selectMode, getModeInstruction, DescriptionMode } from "./context";
 
 // ─── Config ─────────────────────────────────────────────────────
-const MAP_WIDTH = 300;
+const MAP_WIDTH  = 300;
 const MAP_HEIGHT = 500;
 const DEFAULT_SEED = "barrow";
-const CHOICES_DELAY_MS = 2000;
+const PAGE_WORD_LIMIT = 350;
 
-// Fragment counts by mode — shorter modes need fewer fragments for the LLM
+// Fragment counts by mode
 const FRAGMENT_COUNTS: Record<DescriptionMode, number> = {
   full: 4, reorientation: 3, movement: 2, transition: 2, tarry: 1,
 };
 
-// ─── State ──────────────────────────────────────────────────────
-let terrain: TerrainMap | null = null;
-let gameState: GameState | null = null;
-let fragments: Fragment[] = [];
-let isGenerating = false;
+// ─── Page behaviour by mode × decision timing ────────────────────
+interface PageBehavior {
+  shouldClear: boolean;
+  appendMarginPx: number; // 0 = use CSS default when shouldClear
+  choicesDelayMs: number;
+}
 
-// Real-time timestamp of when current choices were shown (for absence detection)
-let lastActionTime = Date.now();
+function getPageBehavior(mode: DescriptionMode, decisionMs: number): PageBehavior {
+  switch (mode) {
+    case "full":
+      return { shouldClear: true,  appendMarginPx: 0,  choicesDelayMs: 3000 };
+    case "reorientation":
+      return { shouldClear: true,  appendMarginPx: 0,  choicesDelayMs: 2500 };
+    case "transition":
+      return { shouldClear: false, appendMarginPx: 20, choicesDelayMs: 1500 };
+    case "movement":
+      if (decisionMs < 5_000)  return { shouldClear: false, appendMarginPx: 10, choicesDelayMs:  800 };
+      if (decisionMs < 30_000) return { shouldClear: false, appendMarginPx: 16, choicesDelayMs: 1500 };
+      return                         { shouldClear: false, appendMarginPx: 28, choicesDelayMs: 2000 };
+    case "tarry":
+      // Rapid accumulation: keep appending. Slower: clear to signal mode shift.
+      if (decisionMs < 10_000) return { shouldClear: false, appendMarginPx: 16, choicesDelayMs: 1000 };
+      return                         { shouldClear: true,  appendMarginPx: 0,  choicesDelayMs: 1500 };
+  }
+}
+
+// ─── State ──────────────────────────────────────────────────────
+let terrain:     TerrainMap | null = null;
+let gameState:   GameState  | null = null;
+let fragments:   Fragment[]        = [];
+let isGenerating                   = false;
+
+// When choices were last shown — used to compute decisionTime and detect absence
+let choicesShownAt = Date.now();
 
 // ─── DOM ────────────────────────────────────────────────────────
 const startScreen  = document.getElementById("start-screen")  as HTMLElement;
@@ -65,21 +91,45 @@ async function clearPage(): Promise<void> {
   for (const p of paras) p.remove();
 }
 
+function countWords(text: string): number {
+  return text.trim().split(/\s+/).filter(w => w.length > 0).length;
+}
+
+function pageWordCount(): number {
+  const paras = Array.from(textPanel.querySelectorAll("p:not(.generating)")) as HTMLElement[];
+  return paras.reduce((n, p) => n + countWords(p.textContent ?? ""), 0);
+}
+
+/** Fade out and remove oldest paragraphs until adding newText would fit within the limit. */
+async function enforcePageCapacity(newText: string): Promise<void> {
+  const incoming = countWords(newText);
+  while (pageWordCount() + incoming > PAGE_WORD_LIMIT) {
+    const paras = textPanel.querySelectorAll("p:not(.generating)");
+    if (paras.length <= 1) break; // never empty the page entirely
+    const oldest = paras[0] as HTMLElement;
+    oldest.style.transition = "opacity 0.4s";
+    oldest.style.opacity = "0";
+    await wait(420);
+    oldest.remove();
+  }
+}
+
 function appendText(
   text: string,
   className?: string,
   marginTopPx?: number,
 ): HTMLParagraphElement {
   const p = document.createElement("p");
-  if (className) p.className = className;
+  if (className)            p.className    = className;
   if (marginTopPx !== undefined) p.style.marginTop = `${marginTopPx}px`;
-  p.textContent = text;
+  p.textContent  = text;
   p.style.opacity = "0";
   textPanel.appendChild(p);
+  // Trigger fade-in on the next paint cycle
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       p.style.transition = "opacity 0.5s";
-      p.style.opacity = "1";
+      p.style.opacity    = "1";
     });
   });
   setTimeout(() => p.scrollIntoView({ behavior: "smooth", block: "nearest" }), 50);
@@ -88,12 +138,12 @@ function appendText(
 
 function hideChoices(): void {
   choicesPanel.style.transition = "";
-  choicesPanel.style.opacity = "0";
-  choicesPanel.innerHTML = "";
+  choicesPanel.style.opacity    = "0";
+  choicesPanel.innerHTML        = "";
 }
 
-function showChoices(choices: Choice[]): void {
-  lastActionTime = Date.now();
+function showChoices(choices: Choice[], delayMs: number): void {
+  choicesShownAt = Date.now();
   choicesPanel.innerHTML = "";
   for (const choice of choices) {
     const btn = document.createElement("button");
@@ -103,8 +153,8 @@ function showChoices(choices: Choice[]): void {
   }
   setTimeout(() => {
     choicesPanel.style.transition = "opacity 0.5s";
-    choicesPanel.style.opacity = "1";
-  }, CHOICES_DELAY_MS);
+    choicesPanel.style.opacity    = "1";
+  }, delayMs);
 }
 
 // ─── Status bar ──────────────────────────────────────────────────
@@ -122,10 +172,9 @@ function updateStatus(world: WorldQuery, state: GameState): void {
     fog: "Fog", wind: "Wind", storm: "Storm",
     snow: "Snow", frost: "Frost", haze: "Haze",
   };
-  const weatherLabel = weatherLabels[state.weather.type] ?? state.weather.type;
 
   statusBar.textContent =
-    `${world.geoInfo.label} · ${world.altitudeMetres}m · ${seasonLabel} · ${timeLabel} · ${weatherLabel}`;
+    `${world.geoInfo.label} · ${world.altitudeMetres}m · ${seasonLabel} · ${timeLabel} · ${weatherLabels[state.weather.type] ?? state.weather.type}`;
 }
 
 // ─── Start game ──────────────────────────────────────────────────
@@ -133,7 +182,7 @@ function updateStatus(world: WorldQuery, state: GameState): void {
 startBtn.addEventListener("click", () => {
   const seed = seedInput.value.trim() || DEFAULT_SEED;
   startScreen.style.display = "none";
-  gameLayout.style.display = "flex";
+  gameLayout.style.display  = "flex";
   startGame(seed);
 });
 
@@ -141,8 +190,8 @@ function startGame(seed: string): void {
   const noise = createSeededNoise(seed);
   terrain = generateTerrain(noise, MAP_WIDTH, MAP_HEIGHT, seed);
 
-  let startX = Math.floor(MAP_WIDTH * 0.45);
-  let startY = Math.floor(MAP_HEIGHT * 0.8);
+  let startX = Math.floor(MAP_WIDTH  * 0.45);
+  let startY = Math.floor(MAP_HEIGHT * 0.80);
   outer: for (let r = 0; r < 20; r++) {
     for (let dx = -r; dx <= r; dx++) {
       for (let dy = -r; dy <= r; dy++) {
@@ -158,49 +207,53 @@ function startGame(seed: string): void {
   }
 
   gameState = createInitialState(seed, startX, startY);
-  lastActionTime = Date.now();
-  renderTurn();
+  choicesShownAt = Date.now();
+  renderTurn(0);   // first turn — no prior decision time
 }
 
 // ─── Turn rendering ──────────────────────────────────────────────
 
-async function renderTurn(): Promise<void> {
+async function renderTurn(decisionMs: number): Promise<void> {
   if (!terrain || !gameState) return;
 
   const world = queryWorld(terrain, gameState.position.x, gameState.position.y);
   updateStatus(world, gameState);
 
-  // Build current perceptual context and select description mode
+  // Context and mode selection
   const currContext = buildContext(world, gameState.weather.type, gameState.time.hour);
-  const isTarrying = gameState.tarryCount > 0;
+  const isTarrying  = gameState.tarryCount > 0;
   const { mode, transitionWhat } = selectMode(
-    gameState.prevContext, currContext, lastActionTime, isTarrying,
+    gameState.prevContext, currContext, choicesShownAt, isTarrying,
   );
 
-  // Determine whether to clear or append, and the gap to use
-  const shouldClear = mode === "full" || mode === "reorientation";
-  const appendMargin = mode === "movement" ? 12 : 20; // px gap for tarry/transition
+  const behavior  = getPageBehavior(mode, decisionMs);
+  const fragCount = FRAGMENT_COUNTS[mode];
 
-  if (shouldClear) {
-    hideChoices();
+  // Prepare page
+  hideChoices();
+  if (behavior.shouldClear) {
     await clearPage();
-  } else {
-    hideChoices();
   }
 
-  // Build voice situation and select fragments
-  const situation = buildSituation(world, gameState);
-  const fragCount = FRAGMENT_COUNTS[mode];
-  const matched = matchFragments(fragments, situation, fragCount);
-  const apiKey = loadApiKey();
+  // Fragment matching and voice generation
+  const situation   = buildSituation(world, gameState);
+  const matched     = matchFragments(fragments, situation, fragCount);
+  const apiKey      = loadApiKey();
   const instruction = getModeInstruction(mode, gameState.tarryCount, transitionWhat);
 
-  let description = "";
+  // Show loading indicator (append mode only — clear mode has no prior text context to lose)
+  let loadingP: HTMLParagraphElement | null = null;
+  if (apiKey && matched.length > 0) {
+    loadingP = appendText(
+      "The land speaks\u2026",
+      "generating",
+      behavior.shouldClear ? undefined : behavior.appendMarginPx,
+    );
+  }
 
+  let description = "";
   if (matched.length > 0) {
     if (apiKey) {
-      const loadingP = appendText("The land speaks\u2026", "generating",
-        shouldClear ? undefined : appendMargin);
       try {
         description = await generateVoice(apiKey, situation, matched, {
           instruction,
@@ -209,7 +262,6 @@ async function renderTurn(): Promise<void> {
       } catch {
         description = fallbackText(matched, mode);
       }
-      loadingP.remove();
     } else {
       description = fallbackText(matched, mode);
     }
@@ -217,35 +269,37 @@ async function renderTurn(): Promise<void> {
     description = fallbackText([], mode);
   }
 
-  appendText(description, undefined, shouldClear ? undefined : appendMargin);
+  // Remove loading indicator, then enforce page capacity before appending
+  loadingP?.remove();
+  if (!behavior.shouldClear) {
+    await enforcePageCapacity(description);
+  }
 
-  // Update state after description is generated
+  appendText(description, undefined, behavior.shouldClear ? undefined : behavior.appendMarginPx);
+
+  // Persist context updates
   gameState.prevContext = currContext;
-  gameState.recentDescriptions = [
-    description,
-    ...gameState.recentDescriptions,
-  ].slice(0, 3);
+  gameState.recentDescriptions = [description, ...gameState.recentDescriptions].slice(0, 3);
 
   const choices = generateChoices(world);
-  showChoices(choices);
+  showChoices(choices, behavior.choicesDelayMs);
 }
 
-/** Fallback text when there are no fragments or no API key. */
+// ─── Fallback text (no API key or no fragments) ───────────────────
+
 function fallbackText(
   matched: { fragment: { text: string }; score: number }[],
   mode: DescriptionMode,
 ): string {
   if (matched.length === 0) {
-    return mode === "movement" ? "The path continues." :
-           mode === "tarry"    ? "Stillness." :
-           mode === "transition" ? "Something has changed." :
-           "You stand in the landscape. The wind moves.";
+    if (mode === "movement")   return "The path continues.";
+    if (mode === "tarry")      return "Stillness.";
+    if (mode === "transition") return "Something has changed.";
+    return "You stand in the landscape. The wind moves.";
   }
-  // For full/reorientation, join multiple fragments
   if (mode === "full" || mode === "reorientation") {
     return matched.map(m => m.fragment.text).join(" ");
   }
-  // For shorter modes, just take the best-matching fragment
   return matched[0].fragment.text;
 }
 
@@ -255,29 +309,29 @@ function makeChoice(choice: Choice): void {
   if (!gameState || isGenerating) return;
   isGenerating = true;
 
-  // Track tarrying vs movement
+  const decisionMs = Date.now() - choicesShownAt;
+
+  // Maintain tarry counter
   if (choice.dx === 0 && choice.dy === 0) {
     gameState.tarryCount++;
   } else {
     gameState.tarryCount = 0;
   }
 
-  gameState.position.x = Math.max(0, Math.min(MAP_WIDTH - 1, gameState.position.x + choice.dx));
+  gameState.position.x = Math.max(0, Math.min(MAP_WIDTH  - 1, gameState.position.x + choice.dx));
   gameState.position.y = Math.max(0, Math.min(MAP_HEIGHT - 1, gameState.position.y + choice.dy));
 
-  for (let i = 0; i < choice.timeCost; i++) {
-    advanceTime(gameState);
-  }
+  for (let i = 0; i < choice.timeCost; i++) advanceTime(gameState);
 
   // Placeholder weather drift
   if (Math.random() < 0.15) {
-    const weathers: GameState["weather"]["type"][] = [
+    const pool: GameState["weather"]["type"][] = [
       "clear", "clear", "clear", "rain", "drizzle", "fog", "wind", "haze",
     ];
-    gameState.weather.type = weathers[Math.floor(Math.random() * weathers.length)];
+    gameState.weather.type = pool[Math.floor(Math.random() * pool.length)];
   }
 
-  renderTurn().then(() => { isGenerating = false; });
+  renderTurn(decisionMs).then(() => { isGenerating = false; });
 }
 
 // ─── Keyboard shortcuts ──────────────────────────────────────────
