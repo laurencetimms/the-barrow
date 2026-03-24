@@ -8,10 +8,10 @@ export { generateTerrain, generateHighResPatch } from "./terrain";
 export type { TerrainCell, TerrainMap } from "./terrain";
 
 export {
-  generateHabitation,
   computeFoodResources,
   generateWightTerritories,
   computeCarryingCapacity,
+  identifyFords,
   computeSettlements,
   computePathNetwork,
   computeSacredSites,
@@ -20,15 +20,14 @@ export {
   validateHabitation,
 } from "./habitation";
 export type {
-  HabitationData, Settlement, SacredSite, Path,
-  FoodCell, FoodResourceMap, WolfTerritory, BearRange,
-  WightSite, WightData,
+  FoodResources, PredatorTerritory, FoodResourceMap,
+  CaveWightTerritory, SmallFolkTerritory, WightData,
   CarryingCapacity,
-  SettlementSize, ActiveSettlement, AbandonedSettlement, Ford, SettlementData,
+  SettlementSize, Settlement, AbandonedReason, AbandonedSettlement, Ford, SettlementData,
   PathSegment, PathNetwork,
-  MajorSiteType, SignificantSiteType, SmallSiteType,
-  MajorSite, SignificantSite, SmallSite, SacredData,
+  MajorSacredType, SignificantSacredType, SmallSacredType,
+  MajorSacredSite, SignificantSacredSite, SmallSacredFeature, SacredData,
   SeasonalCampType, SeasonalCamp, SeasonalData,
-  HuntingWaypoint, HuntingCircuit, HuntingData,
+  HuntingSeason, HuntingWaypoint, HuntingCircuit, HuntingData,
   ValidationReport,
 } from "./habitation";

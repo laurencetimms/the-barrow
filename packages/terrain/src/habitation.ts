@@ -1,1098 +1,2286 @@
-import { TerrainMap, TerrainCell } from "./terrain";
+/**
+ * Habitation generation for The Barrow.
+ *
+ * This module is built incrementally. Step 1: Animal Distribution Overlay.
+ * Each subsequent step adds to this file or calls into it.
+ */
+
+import { TerrainMap } from "./terrain";
 import { GeologyType } from "./geology";
+import { createSeededNoise } from "./noise";
 
-// ─── PRNG ─────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Step 1: Animal Distribution Overlay
+// ---------------------------------------------------------------------------
 
-function hashStr(str: string): number {
-  let h = 0;
-  for (let i = 0; i < str.length; i++) {
-    h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
-  }
-  return h;
+export interface FoodResources {
+  deer:      number;  // 0-1 density
+  boar:      number;  // 0-1 density
+  aurochs:   number;  // 0-1 density
+  fish:      number;  // 0-1 availability
+  wildfowl:  number;  // 0-1 density
+  hares:     number;  // 0-1 density
+  shellfish: number;  // 0-1 availability
+  wolfRisk:  number;  // 0-1 danger level
+  bearRisk:  number;  // 0-1 danger level
 }
 
-function mulberry32(seed: number): () => number {
-  return function () {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+export interface PredatorTerritory {
+  cx: number;     // grid x
+  cy: number;     // grid y
+  radius: number;
 }
-
-function makeRng(seed: string, offset = 0): () => number {
-  return mulberry32(hashStr(seed) + offset);
-}
-
-// ─── TYPES ────────────────────────────────────────────────────────────────────
-
-export interface FoodCell {
-  deer: number;
-  fish: number;
-  wildfowl: number;
-  wolfRisk: number;
-  bearRisk: number;
-}
-
-export interface WolfTerritory { x: number; y: number; radius: number; packSize: number; }
-export interface BearRange     { x: number; y: number; radius: number; }
 
 export interface FoodResourceMap {
-  grid: FoodCell[];
-  wolfTerritories: WolfTerritory[];
-  bearRanges: BearRange[];
+  width:            number;
+  height:           number;
+  /** Flat array indexed [y * width + x]. */
+  grid:             FoodResources[];
+  wolfTerritories:  PredatorTerritory[];
+  bearRanges:       PredatorTerritory[];
+  /** BFS distance to nearest river cell, capped at 10. */
+  nearRiver:        Int16Array;
+  /** BFS distance to nearest coast cell, capped at 10. */
+  nearCoast:        Int16Array;
+  /** BFS distance to nearest water-lands cell, capped at 8. */
+  nearWaterLands:   Int16Array;
 }
 
-export interface WightSite { x: number; y: number; occupied: boolean; }
-export interface WightData {
-  caveWights: WightSite[];
-  smallFolk: WightSite[];
-}
+// ---------------------------------------------------------------------------
+// Multi-source BFS proximity map
+// ---------------------------------------------------------------------------
 
-export interface CarryingCapacity {
-  habitability: number[]; // flat [y * W + x], 0..1
-}
+/**
+ * Returns a flat Int16Array where each entry is the BFS distance (in cells)
+ * from the nearest source cell, capped at `maxDist`. Unreachable cells get
+ * maxDist + 1.
+ */
+function bfsProximity(
+  width: number,
+  height: number,
+  maxDist: number,
+  isSource: (idx: number) => boolean
+): Int16Array {
+  const INF = maxDist + 1;
+  const dist = new Int16Array(width * height).fill(INF);
+  const queue: number[] = [];
 
-export type SettlementSize = "homestead" | "hamlet" | "village" | "town";
-export interface ActiveSettlement {
-  x: number; y: number;
-  population: number;
-  size: SettlementSize;
-  isWalledTown: boolean;
-  isWaterLands: boolean;
-}
-export interface AbandonedSettlement {
-  x: number; y: number;
-  historicalSize: SettlementSize;
-  reason: "waterRose" | "iceAdvanced" | "landMarginal";
-}
-export interface Ford { x: number; y: number; }
-export interface SettlementData {
-  settlements: ActiveSettlement[];
-  fords: Ford[];
-  abandoned: AbandonedSettlement[];
-}
+  for (let i = 0; i < width * height; i++) {
+    if (isSource(i)) {
+      dist[i] = 0;
+      queue.push(i);
+    }
+  }
 
-export interface PathSegment { cells: [number, number][]; traffic: number; }
-export interface PathNetwork  { paths: PathSegment[]; }
+  const dirs = [-width, width, -1, 1]; // N S W E (4-connected)
 
-export type MajorSiteType       = "greatComplex" | "henge" | "stoneCircle";
-export type SignificantSiteType = "barrow" | "standingStone" | "smallStoneCircle" | "cairn";
-export type SmallSiteType       = "sacredSpring" | "offeringPool" | "caveEntrance" | "sacredTree" | "carvedRockFace" | "markedStone";
-export interface MajorSite       { x: number; y: number; type: MajorSiteType; }
-export interface SignificantSite { x: number; y: number; type: SignificantSiteType; }
-export interface SmallSite       { x: number; y: number; type: SmallSiteType; minZoom: number; }
-export interface SacredData {
-  major: MajorSite[];
-  significant: SignificantSite[];
-  small: SmallSite[];
-}
+  for (let qi = 0; qi < queue.length; qi++) {
+    const idx = queue[qi];
+    const d = dist[idx];
+    if (d >= maxDist) continue;
+    const cx = idx % width;
+    const cy = (idx - cx) / width;
 
-export type SeasonalCampType = "grazingCamp" | "fishingCamp" | "gatheringCamp" | "flintMiningCamp" | "tradingSite";
-export interface SeasonalCamp { x: number; y: number; type: SeasonalCampType; }
-export interface SeasonalData { camps: SeasonalCamp[]; }
-
-export interface HuntingWaypoint { x: number; y: number; }
-export interface HuntingCircuit  { groupSize: number; pathCells: [number, number][]; waypoints: HuntingWaypoint[]; }
-export interface HuntingData     { circuits: HuntingCircuit[]; }
-
-export interface ValidationReport { summary: string[]; }
-
-// Legacy interface kept for backwards compat (game package uses it)
-export interface Settlement { x: number; y: number; population: number; size: SettlementSize; name?: string; abandoned?: boolean; }
-export interface SacredSite  { x: number; y: number; type: string; tier: "major" | "significant" | "small"; }
-export interface Path        { cells: [number, number][]; traffic: number; }
-export interface HabitationData { settlements: Settlement[]; sacredSites: SacredSite[]; paths: Path[]; }
-
-// ─── HELPERS ──────────────────────────────────────────────────────────────────
-
-function cell(terrain: TerrainMap, x: number, y: number): TerrainCell {
-  return terrain.cells[y][x];
-}
-
-function inBounds(terrain: TerrainMap, x: number, y: number): boolean {
-  return x >= 0 && x < terrain.width && y >= 0 && y < terrain.height;
-}
-
-function idx(W: number, x: number, y: number): number { return y * W + x; }
-
-/** Clamp a value to [0, 1]. */
-function clamp01(v: number): number { return v < 0 ? 0 : v > 1 ? 1 : v; }
-
-/** Noise-like deterministic perturbation based on coordinates. */
-function cellNoise(seed: number, x: number, y: number): number {
-  let h = seed ^ (x * 374761393 + y * 668265263);
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}
-
-/** Whether a cell is habitable land (not water, ice, or glacial). */
-function isLand(c: TerrainCell): boolean {
-  return c.geology !== GeologyType.Water &&
-         c.geology !== GeologyType.Ice &&
-         c.geology !== GeologyType.Glacial;
-}
-
-/** Whether a cell is a water-lands raised-island or carr (marginally habitable). */
-function isHabitableWaterLands(c: TerrainCell): boolean {
-  return c.geology === GeologyType.Water &&
-    (c.waterLandsType === "raisedIsland" || c.waterLandsType === "carrWoodland");
-}
-
-// ─── 1. FOOD RESOURCES ────────────────────────────────────────────────────────
-
-export function computeFoodResources(terrain: TerrainMap, seed: string): FoodResourceMap {
-  const W = terrain.width, H = terrain.height;
-  const rng = makeRng(seed, 1000);
-  const grid: FoodCell[] = new Array(W * H);
-
-  // Base values by geology
-  const DEER_BASE: Partial<Record<GeologyType, number>> = {
-    [GeologyType.Clay]:      0.75,
-    [GeologyType.Slate]:     0.65,
-    [GeologyType.Limestone]: 0.60,
-    [GeologyType.Sandstone]: 0.55,
-    [GeologyType.Chalk]:     0.45,
-    [GeologyType.Granite]:   0.25,
-    [GeologyType.Glacial]:   0.08,
-    [GeologyType.Ice]:       0.00,
-    [GeologyType.Water]:     0.00,
-  };
-  const WOLF_BASE: Partial<Record<GeologyType, number>> = {
-    [GeologyType.Clay]:      0.50,
-    [GeologyType.Slate]:     0.40,
-    [GeologyType.Granite]:   0.35,
-    [GeologyType.Limestone]: 0.25,
-    [GeologyType.Sandstone]: 0.28,
-    [GeologyType.Chalk]:     0.12,
-    [GeologyType.Glacial]:   0.05,
-    [GeologyType.Ice]:       0.00,
-    [GeologyType.Water]:     0.00,
-  };
-  const BEAR_BASE: Partial<Record<GeologyType, number>> = {
-    [GeologyType.Granite]:   0.50,
-    [GeologyType.Slate]:     0.35,
-    [GeologyType.Clay]:      0.28,
-    [GeologyType.Limestone]: 0.20,
-    [GeologyType.Sandstone]: 0.22,
-    [GeologyType.Chalk]:     0.08,
-    [GeologyType.Glacial]:   0.05,
-    [GeologyType.Ice]:       0.00,
-    [GeologyType.Water]:     0.00,
-  };
-
-  const seedNum = hashStr(seed);
-
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const c = terrain.cells[y][x];
-      const g = c.geology;
-      const n = cellNoise(seedNum, x, y) * 0.25 - 0.125; // ±0.125 noise
-
-      let deer     = clamp01((DEER_BASE[g] ?? 0.1) + n + c.altitude * -0.15);
-      let fish     = 0;
-      let wildfowl = 0;
-      let wolfRisk = clamp01((WOLF_BASE[g] ?? 0.05) + n * 0.5);
-      let bearRisk = clamp01((BEAR_BASE[g] ?? 0.03) + c.altitude * 0.25 + n * 0.3);
-
-      // Fish: rivers
-      if (c.riverFlow > 5)  fish  = clamp01(0.3 + Math.min(c.riverFlow, 150) / 200);
-      if (c.isCoast)        fish  = Math.max(fish, 0.4);
-
-      // Water-lands fish/wildfowl
-      if (g === GeologyType.Water) {
-        switch (c.waterLandsType) {
-          case "reedBed":      fish = 0.5; wildfowl = 0.85; break;
-          case "mudFlat":      fish = 0.4; wildfowl = 0.70; break;
-          case "openWater":    fish = 0.6; wildfowl = 0.55; break;
-          case "tidalChannel": fish = 0.7; wildfowl = 0.60; break;
-          case "raisedIsland": fish = 0.3; wildfowl = 0.45; break;
-          case "carrWoodland": fish = 0.2; wildfowl = 0.50; break;
-          default:             fish = 0.3; wildfowl = 0.40; break;
-        }
-        deer = 0; wolfRisk = 0.05; bearRisk = 0.02;
+    for (const dd of dirs) {
+      const ni = idx + dd;
+      if (ni < 0 || ni >= width * height) continue;
+      // Prevent wrap-around at east/west edges
+      const nx2 = ni % width;
+      if (Math.abs(nx2 - cx) > 1) continue;
+      if (dist[ni] > d + 1) {
+        dist[ni] = d + 1;
+        queue.push(ni);
       }
-
-      // Coastal wildfowl
-      if (c.isCoast) wildfowl = Math.max(wildfowl, 0.5);
-      if (c.riverFlow > 5) wildfowl = Math.max(wildfowl, 0.3);
-
-      grid[idx(W, x, y)] = { deer, fish, wildfowl, wolfRisk, bearRisk };
     }
   }
 
-  // Build wolf territories: seed pack centres in high-wolf-risk cells
-  const wolfTerritories: WolfTerritory[] = [];
-  const NUM_WOLF_PACKS = 18;
-  const usedW = new Set<number>();
-  const wolfCandidates: [number, number, number][] = []; // [wolfRisk, x, y]
-  for (let y = 4; y < H - 4; y += 4) {
-    for (let x = 4; x < W - 4; x += 4) {
-      const c = terrain.cells[y][x];
-      if (!isLand(c)) continue;
-      const wr = grid[idx(W, x, y)].wolfRisk;
-      if (wr > 0.25) wolfCandidates.push([wr, x, y]);
-    }
-  }
-  wolfCandidates.sort((a, b) => b[0] - a[0]);
-  for (const [, wx, wy] of wolfCandidates) {
-    if (wolfTerritories.length >= NUM_WOLF_PACKS) break;
-    let tooClose = false;
-    for (const t of wolfTerritories) {
-      if (Math.hypot(wx - t.x, wy - t.y) < 25) { tooClose = true; break; }
-    }
-    if (tooClose) continue;
-    usedW.add(idx(W, wx, wy));
-    wolfTerritories.push({ x: wx, y: wy, radius: 10 + Math.floor(rng() * 10), packSize: 4 + Math.floor(rng() * 6) });
-  }
-
-  // Bear ranges: high-altitude granite/slate
-  const bearRanges: BearRange[] = [];
-  const NUM_BEAR_RANGES = 10;
-  const bearCandidates: [number, number, number][] = [];
-  for (let y = 4; y < H - 4; y += 5) {
-    for (let x = 4; x < W - 4; x += 5) {
-      const c = terrain.cells[y][x];
-      if (!isLand(c)) continue;
-      const br = grid[idx(W, x, y)].bearRisk;
-      if (br > 0.3) bearCandidates.push([br, x, y]);
-    }
-  }
-  bearCandidates.sort((a, b) => b[0] - a[0]);
-  for (const [, bx, by] of bearCandidates) {
-    if (bearRanges.length >= NUM_BEAR_RANGES) break;
-    let tooClose = false;
-    for (const r of bearRanges) {
-      if (Math.hypot(bx - r.x, by - r.y) < 30) { tooClose = true; break; }
-    }
-    if (tooClose) continue;
-    bearRanges.push({ x: bx, y: by, radius: 15 + Math.floor(rng() * 15) });
-  }
-
-  return { grid, wolfTerritories, bearRanges };
+  return dist;
 }
 
-// ─── 2. WIGHT TERRITORIES ─────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Per-cell food resource computation
+// ---------------------------------------------------------------------------
 
-export function generateWightTerritories(terrain: TerrainMap, seed: string): WightData {
-  const W = terrain.width, H = terrain.height;
-  const rng = makeRng(seed, 2000);
-  const caveWights: WightSite[] = [];
-  const smallFolk: WightSite[] = [];
+function clamp(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
 
-  // Cave wights: limestone/sandstone, moderate altitude, caves implied
-  for (let y = 3; y < H - 3; y += 7) {
-    for (let x = 3; x < W - 3; x += 7) {
-      const c = terrain.cells[y][x];
-      if (c.geology !== GeologyType.Limestone && c.geology !== GeologyType.Sandstone) continue;
-      if (c.altitude < 0.2 || c.altitude > 0.7) continue;
-      if (rng() > 0.25) continue;
-      // Small jitter
-      const jx = x + Math.floor((rng() - 0.5) * 4);
-      const jy = y + Math.floor((rng() - 0.5) * 4);
-      if (!inBounds(terrain, jx, jy)) continue;
-      caveWights.push({ x: jx, y: jy, occupied: rng() < 0.55 });
+/**
+ * Computes base deer density for a cell's geology, before modifiers.
+ */
+function deerBase(geo: GeologyType): number {
+  switch (geo) {
+    case GeologyType.Clay:      return 0.55;
+    case GeologyType.Chalk:     return 0.60;
+    case GeologyType.Limestone: return 0.75;
+    case GeologyType.Sandstone: return 0.40;
+    case GeologyType.Slate:     return 0.60;
+    case GeologyType.Granite:   return 0.35;
+    case GeologyType.Glacial:   return 0.15;
+    default: return 0;
+  }
+}
+
+function boarBase(geo: GeologyType): number {
+  switch (geo) {
+    case GeologyType.Clay:      return 0.70;
+    case GeologyType.Limestone: return 0.65;
+    case GeologyType.Slate:     return 0.60;
+    case GeologyType.Sandstone: return 0.25;
+    case GeologyType.Chalk:     return 0.20;
+    case GeologyType.Granite:   return 0.10;
+    case GeologyType.Glacial:   return 0.05;
+    default: return 0;
+  }
+}
+
+function aurochsBase(geo: GeologyType): number {
+  switch (geo) {
+    case GeologyType.Chalk:     return 0.60;
+    case GeologyType.Limestone: return 0.45;
+    case GeologyType.Clay:      return 0.35;
+    case GeologyType.Sandstone: return 0.20;
+    case GeologyType.Granite:   return 0.05;
+    default: return 0;
+  }
+}
+
+function haresBase(geo: GeologyType): number {
+  switch (geo) {
+    case GeologyType.Chalk:     return 0.70;
+    case GeologyType.Sandstone: return 0.55;
+    case GeologyType.Granite:   return 0.45;
+    case GeologyType.Limestone: return 0.50;
+    case GeologyType.Clay:      return 0.20;
+    case GeologyType.Glacial:   return 0.30;
+    default: return 0;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Wolf / bear territory placement helpers
+// ---------------------------------------------------------------------------
+
+function minSpacingFilter(
+  candidates: { x: number; y: number; score: number }[],
+  minSpacing: number
+): { x: number; y: number; score: number }[] {
+  const chosen: { x: number; y: number; score: number }[] = [];
+  for (const c of candidates) {
+    const tooClose = chosen.some(
+      (p) => Math.hypot(p.x - c.x, p.y - c.y) < minSpacing
+    );
+    if (!tooClose) chosen.push(c);
+  }
+  return chosen;
+}
+
+// ---------------------------------------------------------------------------
+// Main export
+// ---------------------------------------------------------------------------
+
+export function computeFoodResources(
+  terrain: TerrainMap,
+  seed: string
+): FoodResourceMap {
+  const { width, height, cells } = terrain;
+
+  // Seeded RNG for predator placement
+  const rng = createSeededNoise(seed + "\0food").random;
+
+  // ── Proximity maps ──────────────────────────────────────────────────────────
+  const nearRiver = bfsProximity(width, height, 10,
+    (i) => {
+      const x = i % width, y = (i - x) / width;
+      return cells[y][x].riverFlow > 0;
+    }
+  );
+
+  const nearCoast = bfsProximity(width, height, 10,
+    (i) => {
+      const x = i % width, y = (i - x) / width;
+      return cells[y][x].isCoast;
+    }
+  );
+
+  const nearWaterLands = bfsProximity(width, height, 8,
+    (i) => {
+      const x = i % width, y = (i - x) / width;
+      return cells[y][x].waterLandsType !== undefined;
+    }
+  );
+
+  // ── Per-cell base food values (before predator risk) ────────────────────────
+  const baseGrid: Omit<FoodResources, 'wolfRisk' | 'bearRisk'>[] = [];
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const cell = cells[y][x];
+      const { geology: geo, altitude: alt, riverFlow, isCoast, waterLandsType } = cell;
+      const idx = y * width + x;
+      const rDist = nearRiver[idx];
+      const cDist = nearCoast[idx];
+      const wDist = nearWaterLands[idx];
+      const inWaterLands = waterLandsType !== undefined;
+
+      // ── Deer ────────────────────────────────────────────────────────────────
+      let deer = deerBase(geo);
+      if (deer > 0) {
+        if (alt > 0.45) deer += 0.15; // summer upland shift
+        if (rDist <= 3) deer += 0.10; // forest-edge / river meadow bonus
+      }
+      deer = clamp(deer);
+
+      // ── Boar ────────────────────────────────────────────────────────────────
+      let boar = boarBase(geo);
+      if (boar > 0) {
+        if (alt > 0.40) boar *= 0.30;
+        if (rDist <= 2) boar = clamp(boar + 0.10);
+      }
+      boar = clamp(boar);
+
+      // ── Aurochs ─────────────────────────────────────────────────────────────
+      let aurochs = aurochsBase(geo);
+      if (alt > 0.38) aurochs *= 0.40;
+      aurochs = clamp(aurochs);
+
+      // ── Fish ────────────────────────────────────────────────────────────────
+      let fish = 0;
+      if (inWaterLands) {
+        fish = 0.70;
+      } else if (riverFlow > 0) {
+        fish = Math.min(1, riverFlow / 400);
+        // Confluence bonus: check if 2+ orthogonal neighbours also have river flow
+        let riverNeighbours = 0;
+        if (x > 0 && cells[y][x - 1].riverFlow > 80) riverNeighbours++;
+        if (x < width - 1 && cells[y][x + 1].riverFlow > 80) riverNeighbours++;
+        if (y > 0 && cells[y - 1][x].riverFlow > 80) riverNeighbours++;
+        if (y < height - 1 && cells[y + 1][x].riverFlow > 80) riverNeighbours++;
+        if (riverNeighbours >= 2) fish = clamp(fish + 0.25);
+        // Tidal reach
+        if (isCoast) fish = clamp(fish + 0.30);
+      } else if (rDist <= 1 && !inWaterLands) {
+        // Bank cell right next to a river
+        const rCell = (() => {
+          const ns: [number, number][] = [[y, x-1],[y, x+1],[y-1, x],[y+1, x]];
+          for (const [ry, rx] of ns) {
+            if (ry >= 0 && ry < height && rx >= 0 && rx < width && cells[ry][rx].riverFlow > 0) {
+              return cells[ry][rx];
+            }
+          }
+          return null;
+        })();
+        fish = rCell ? Math.min(0.50, rCell.riverFlow / 400) : 0;
+        if (isCoast) fish = clamp(fish + 0.30);
+      } else if (isCoast && !inWaterLands) {
+        fish = 0.45; // sea fishing
+      }
+      fish = clamp(fish);
+
+      // ── Wildfowl ────────────────────────────────────────────────────────────
+      let wildfowl = 0;
+      if (inWaterLands) {
+        wildfowl = 0.85;
+      } else if (isCoast) {
+        wildfowl = 0.50;
+      } else if (wDist <= 3) {
+        wildfowl = 0.60 * Math.max(0, 1 - wDist / 4);
+      } else if (rDist <= 2) {
+        wildfowl = 0.35;
+      }
+      wildfowl = clamp(wildfowl);
+
+      // ── Hares ───────────────────────────────────────────────────────────────
+      let hares = haresBase(geo);
+      if (alt > 0.45 && hares > 0) hares = clamp(hares + 0.10);
+      hares = clamp(hares);
+
+      // ── Shellfish ───────────────────────────────────────────────────────────
+      let shellfish = 0;
+      if (inWaterLands &&
+          (waterLandsType === 'mudFlat' || waterLandsType === 'openWater' || waterLandsType === 'reedBed')) {
+        shellfish = 0.70;
+      } else if (isCoast) {
+        shellfish = 0.50;
+      } else if (cDist <= 2) {
+        shellfish = 0.40 * Math.max(0, 1 - cDist / 3);
+      }
+      shellfish = clamp(shellfish);
+
+      baseGrid.push({ deer, boar, aurochs, fish, wildfowl, hares, shellfish });
     }
   }
 
-  // Small folk: ancient forest (clay/limestone lowlands), hidden clearings
-  for (let y = 5; y < H - 5; y += 9) {
-    for (let x = 5; x < W - 5; x += 9) {
-      const c = terrain.cells[y][x];
-      if (c.geology !== GeologyType.Clay && c.geology !== GeologyType.Limestone) continue;
-      if (c.altitude > 0.35) continue;
-      if (rng() > 0.20) continue;
-      const jx = x + Math.floor((rng() - 0.5) * 6);
-      const jy = y + Math.floor((rng() - 0.5) * 6);
-      if (!inBounds(terrain, jx, jy)) continue;
-      smallFolk.push({ x: jx, y: jy, occupied: rng() < 0.45 });
+  // ── Wolf territory placement ─────────────────────────────────────────────────
+  // Candidates: high deer density in less-settled terrain (away from coasts,
+  // in granite/slate/clay far from the sea)
+  const wolfCandidates: { x: number; y: number; score: number }[] = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      const cell = cells[y][x];
+      const geo = cell.geology;
+      const r = baseGrid[idx];
+      // Low-pressure zones: not coastal, not water-lands, deeper inland
+      if (cell.isCoast || cell.waterLandsType) continue;
+      if (geo === GeologyType.Water || geo === GeologyType.Ice) continue;
+      const cDist2 = nearCoast[idx];
+      if (cDist2 < 5) continue; // too close to coast = more people
+      if (r.deer > 0.40) {
+        // Score: deer density, penalise if too close to coasts
+        const score = r.deer + (cDist2 > 10 ? 0.10 : 0);
+        wolfCandidates.push({ x, y, score });
+      }
     }
   }
+  wolfCandidates.sort((a, b) => b.score - a.score);
+
+  const wolfCount = 8 + Math.floor(rng() * 5); // 8-12
+  const wolfChosen = minSpacingFilter(wolfCandidates.slice(0, 60), 15).slice(0, wolfCount);
+  const wolfTerritories: PredatorTerritory[] = wolfChosen.map((c) => ({
+    cx: c.x, cy: c.y,
+    radius: 8 + Math.floor(rng() * 5), // 8-12
+  }));
+
+  // ── Bear range placement ─────────────────────────────────────────────────────
+  // Candidates: forested cells (Clay below treeline, Limestone valleys, Slate)
+  const bearCandidates: { x: number; y: number; score: number }[] = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const cell = cells[y][x];
+      const geo = cell.geology;
+      const alt = cell.altitude;
+      if (geo === GeologyType.Water || geo === GeologyType.Ice) continue;
+      if (cell.waterLandsType) continue;
+      const isForested =
+        (geo === GeologyType.Clay && alt < 0.40) ||
+        (geo === GeologyType.Limestone && alt < 0.36) ||
+        (geo === GeologyType.Slate);
+      if (!isForested) continue;
+      const idx = y * width + x;
+      const cDist2 = nearCoast[idx];
+      if (cDist2 < 3) continue;
+      const score = (geo === GeologyType.Clay ? 0.8 : geo === GeologyType.Slate ? 0.7 : 0.6)
+        + (cDist2 > 8 ? 0.1 : 0);
+      bearCandidates.push({ x, y, score });
+    }
+  }
+  bearCandidates.sort((a, b) => b.score - a.score);
+
+  const bearCount = 20 + Math.floor(rng() * 21); // 20-40
+  const bearChosen = minSpacingFilter(bearCandidates.slice(0, 200), 6).slice(0, bearCount);
+  const bearRanges: PredatorTerritory[] = bearChosen.map((c) => ({
+    cx: c.x, cy: c.y,
+    radius: 4 + Math.floor(rng() * 3), // 4-6
+  }));
+
+  // ── Apply predator risk to grid ──────────────────────────────────────────────
+  const grid: FoodResources[] = baseGrid.map((base) => ({
+    ...base,
+    wolfRisk: 0,
+    bearRisk: 0,
+  }));
+
+  for (const t of wolfTerritories) {
+    const r2 = t.radius;
+    const x0 = Math.max(0, t.cx - r2 - 1);
+    const x1 = Math.min(width - 1, t.cx + r2 + 1);
+    const y0 = Math.max(0, t.cy - r2 - 1);
+    const y1 = Math.min(height - 1, t.cy + r2 + 1);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const dist = Math.hypot(x - t.cx, y - t.cy);
+        const risk = Math.max(0, 1 - dist / r2);
+        const idx = y * width + x;
+        if (risk > grid[idx].wolfRisk) grid[idx].wolfRisk = risk;
+      }
+    }
+  }
+
+  for (const b of bearRanges) {
+    const r2 = b.radius;
+    const x0 = Math.max(0, b.cx - r2 - 1);
+    const x1 = Math.min(width - 1, b.cx + r2 + 1);
+    const y0 = Math.max(0, b.cy - r2 - 1);
+    const y1 = Math.min(height - 1, b.cy + r2 + 1);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const dist = Math.hypot(x - b.cx, y - b.cy);
+        const risk = Math.max(0, 1 - dist / r2) * 0.80;
+        const idx = y * width + x;
+        if (risk > grid[idx].bearRisk) grid[idx].bearRisk = risk;
+      }
+    }
+  }
+
+  return { width, height, grid, wolfTerritories, bearRanges, nearRiver, nearCoast, nearWaterLands };
+}
+
+// ---------------------------------------------------------------------------
+// Step 2: Wight Territories
+// ---------------------------------------------------------------------------
+
+export interface CaveWightTerritory {
+  cx: number;
+  cy: number;
+  /** Core radius — almost nobody lives here. */
+  coreRadius: number;
+  /** Peripheral radius — settlement is suppressed but not zero. */
+  peripheralRadius: number;
+  occupied: boolean;
+}
+
+export interface SmallFolkTerritory {
+  cx: number;
+  cy: number;
+  radius: number;
+  occupied: boolean;
+}
+
+export interface WightData {
+  caveWights:  CaveWightTerritory[];
+  smallFolk:   SmallFolkTerritory[];
+}
+
+/**
+ * Generates wight territories from terrain data.
+ *
+ * Cave-wights: limestone at moderate altitude (0.28–0.50) with high local
+ * terrain complexity (roughness suggesting cave-forming landscape).
+ * 10–15 candidate sites; 8–12 are occupied.
+ *
+ * Small-folk: warm wet habitat — low-altitude clay or water-lands with
+ * high moisture (near rivers, in water-lands, near coast).
+ * 5–10 candidate sites; 3–7 are occupied.
+ *
+ * Territories are invisible data only — not rendered, but influence
+ * carrying capacity (Step 3) and sacred site placement (Step 7).
+ */
+export function generateWightTerritories(
+  terrain: TerrainMap,
+  seed: string
+): WightData {
+  const { width, height, cells } = terrain;
+  const rng = createSeededNoise(seed + "\0wight").random;
+
+  // ── Terrain roughness (local altitude standard deviation) ───────────────────
+  // Used to identify cave-forming limestone terrain. Computed over a radius-3
+  // window; stored as a flat Float32Array.
+  const ROUGH_RADIUS = 3;
+  const roughness = new Float32Array(width * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let sum = 0, sumSq = 0, count = 0;
+      for (let dy = -ROUGH_RADIUS; dy <= ROUGH_RADIUS; dy++) {
+        for (let dx = -ROUGH_RADIUS; dx <= ROUGH_RADIUS; dx++) {
+          const nx2 = x + dx, ny2 = y + dy;
+          if (nx2 < 0 || nx2 >= width || ny2 < 0 || ny2 >= height) continue;
+          const a = cells[ny2][nx2].altitude;
+          sum += a;
+          sumSq += a * a;
+          count++;
+        }
+      }
+      const mean = sum / count;
+      roughness[y * width + x] = Math.sqrt(Math.max(0, sumSq / count - mean * mean));
+    }
+  }
+
+  // ── Proximity maps needed for small-folk ────────────────────────────────────
+  const nearRiver = bfsProximity(width, height, 6,
+    (i) => { const x = i % width, y = (i - x) / width; return cells[y][x].riverFlow > 0; }
+  );
+  const nearCoast = bfsProximity(width, height, 6,
+    (i) => { const x = i % width, y = (i - x) / width; return cells[y][x].isCoast; }
+  );
+
+  // ── Cave-wight candidates ────────────────────────────────────────────────────
+  type Candidate = { x: number; y: number; score: number };
+  const caveRaw: Candidate[] = [];
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const cell = cells[y][x];
+      if (cell.geology !== GeologyType.Limestone) continue;
+      if (cell.altitude < 0.28 || cell.altitude > 0.50) continue;
+      const rough = roughness[y * width + x];
+      if (rough < 0.018) continue; // not complex enough
+      const score = rough * 10 + (cell.altitude - 0.28) / 0.22;
+      caveRaw.push({ x, y, score });
+    }
+  }
+  caveRaw.sort((a, b) => b.score - a.score);
+
+  // Apply minimum spacing to get distinct territories (min 12 cells apart)
+  const caveSpaced = minSpacingFilter(caveRaw, 12);
+  // Take 10-15 candidates (but no more than available)
+  const caveCandidateCount = Math.min(caveSpaced.length, 10 + Math.floor(rng() * 6));
+  const caveCandidates = caveSpaced.slice(0, caveCandidateCount);
+
+  // Mark 8-12 as occupied (at least 80% of candidates, but cap at available)
+  const caveOccupiedCount = Math.min(caveCandidates.length, 8 + Math.floor(rng() * 5));
+  // Shuffle candidates lightly with RNG so occupied ones aren't always the top-scorers
+  const caveShuffled = [...caveCandidates].sort(() => rng() - 0.5);
+
+  const caveWights: CaveWightTerritory[] = caveShuffled.map((c, i) => ({
+    cx: c.x,
+    cy: c.y,
+    coreRadius:       3 + Math.floor(rng() * 2),  // 3-4
+    peripheralRadius: 6 + Math.floor(rng() * 3),  // 6-8
+    occupied: i < caveOccupiedCount,
+  }));
+
+  // ── Small-folk candidates ────────────────────────────────────────────────────
+  const sfRaw: Candidate[] = [];
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const cell = cells[y][x];
+      // Warm wet habitat: low clay or water-lands
+      const isLowClay = cell.geology === GeologyType.Clay
+        && cell.altitude < 0.30
+        && cell.altitude >= 0.22;
+      const isWaterLands = cell.waterLandsType !== undefined
+        && (cell.waterLandsType === 'raisedIsland' || cell.waterLandsType === 'carrWoodland');
+      if (!isLowClay && !isWaterLands) continue;
+
+      const idx = y * width + x;
+      const rDist = nearRiver[idx];
+      const cDist = nearCoast[idx];
+      // Need moisture: near river, in water-lands, or near coast
+      if (rDist > 3 && cDist > 4 && !isWaterLands) continue;
+
+      let score = 0;
+      if (isWaterLands) score += 0.5;
+      if (rDist <= 1) score += 0.4;
+      else if (rDist <= 3) score += 0.2;
+      if (cDist <= 2) score += 0.2;
+      sfRaw.push({ x, y, score });
+    }
+  }
+  sfRaw.sort((a, b) => b.score - a.score);
+
+  // Spacing 10 cells apart so territories are geographically distinct
+  const sfSpaced = minSpacingFilter(sfRaw, 10);
+  const sfCandidateCount = Math.min(sfSpaced.length, 5 + Math.floor(rng() * 6));
+  const sfCandidates = sfSpaced.slice(0, sfCandidateCount);
+
+  const sfOccupiedCount = Math.min(sfCandidates.length, 3 + Math.floor(rng() * 5));
+  const sfShuffled = [...sfCandidates].sort(() => rng() - 0.5);
+
+  const smallFolk: SmallFolkTerritory[] = sfShuffled.map((c, i) => ({
+    cx: c.x,
+    cy: c.y,
+    radius: 3 + Math.floor(rng() * 3),  // 3-5
+    occupied: i < sfOccupiedCount,
+  }));
 
   return { caveWights, smallFolk };
 }
 
-// ─── 3. CARRYING CAPACITY ─────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Step 3: Carrying Capacity
+// ---------------------------------------------------------------------------
 
-export function computeCarryingCapacity(
-  terrain: TerrainMap,
-  food: FoodResourceMap,
-  wights: WightData,
-): CarryingCapacity {
-  const W = terrain.width, H = terrain.height;
-
-  // Base habitability by geology
-  const GEO_HAB: Partial<Record<GeologyType, number>> = {
-    [GeologyType.Chalk]:     0.72,
-    [GeologyType.Limestone]: 0.65,
-    [GeologyType.Clay]:      0.58,
-    [GeologyType.Sandstone]: 0.50,
-    [GeologyType.Slate]:     0.38,
-    [GeologyType.Granite]:   0.18,
-    [GeologyType.Glacial]:   0.08,
-    [GeologyType.Ice]:       0.00,
-    [GeologyType.Water]:     0.00,
-  };
-
-  // Build a quick flood map: distance to nearest river (capped)
-  const riverProx = new Float32Array(W * H).fill(99);
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      if (terrain.cells[y][x].riverFlow > 5) riverProx[idx(W, x, y)] = 0;
-    }
-  }
-  // Simple BFS spread (1 pass approximation is good enough)
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const i = idx(W, x, y);
-      if (riverProx[i] === 0) continue;
-      let best = riverProx[i];
-      if (x > 0) best = Math.min(best, riverProx[i-1] + 1);
-      if (y > 0) best = Math.min(best, riverProx[i-W] + 1);
-      riverProx[i] = best;
-    }
-  }
-  for (let y = H-1; y >= 0; y--) {
-    for (let x = W-1; x >= 0; x--) {
-      const i = idx(W, x, y);
-      let best = riverProx[i];
-      if (x < W-1) best = Math.min(best, riverProx[i+1] + 1);
-      if (y < H-1) best = Math.min(best, riverProx[i+W] + 1);
-      riverProx[i] = best;
-    }
-  }
-
-  // Wight penalty zones
-  const wightPenalty = new Float32Array(W * H);
-  for (const w of wights.caveWights) {
-    if (w.occupied) {
-      for (let dy = -6; dy <= 6; dy++) {
-        for (let dx = -6; dx <= 6; dx++) {
-          const nx = w.x + dx, ny = w.y + dy;
-          if (!inBounds(terrain, nx, ny)) continue;
-          const d = Math.hypot(dx, dy);
-          if (d <= 6) wightPenalty[idx(W, nx, ny)] += 0.15 * (1 - d / 7);
-        }
-      }
-    }
-  }
-  for (const w of wights.smallFolk) {
-    if (w.occupied) {
-      for (let dy = -4; dy <= 4; dy++) {
-        for (let dx = -4; dx <= 4; dx++) {
-          const nx = w.x + dx, ny = w.y + dy;
-          if (!inBounds(terrain, nx, ny)) continue;
-          const d = Math.hypot(dx, dy);
-          if (d <= 4) wightPenalty[idx(W, nx, ny)] += 0.10 * (1 - d / 5);
-        }
-      }
-    }
-  }
-
-  const habitability = new Array<number>(W * H);
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const c = terrain.cells[y][x];
-      const i = idx(W, x, y);
-
-      let h = GEO_HAB[c.geology] ?? 0;
-      if (h === 0 && !isHabitableWaterLands(c)) {
-        habitability[i] = 0;
-        continue;
-      }
-      if (isHabitableWaterLands(c)) h = 0.30;
-
-      // Altitude penalty (above 0.35 it gets hard to farm)
-      if (c.altitude > 0.35) h *= Math.max(0, 1 - (c.altitude - 0.35) * 2.0);
-
-      // Very low land (near sea level) is waterlogged
-      if (c.altitude < 0.05 && !c.isCoast) h *= 0.5;
-
-      // River proximity bonus (up to +0.18 within 3 cells)
-      const rp = riverProx[i];
-      if (rp <= 3) h += 0.18 * (1 - rp / 4);
-
-      // Coast bonus (fishing/transport)
-      if (c.isCoast) h += 0.08;
-
-      // Food richness bonus (deer + fish + wildfowl)
-      const f = food.grid[i];
-      h += (f.deer * 0.04 + f.fish * 0.06 + f.wildfowl * 0.04);
-
-      // Predator risk penalty
-      h -= (f.wolfRisk * 0.08 + f.bearRisk * 0.05);
-
-      // Wight penalty
-      h -= wightPenalty[i];
-
-      habitability[i] = clamp01(h);
-    }
-  }
-
-  return { habitability };
+export interface CarryingCapacity {
+  width:       number;
+  height:      number;
+  /** Habitability score per cell, flat [y * width + x], values 0..1. */
+  habitability: Float32Array;
 }
 
-// ─── 4. SETTLEMENTS ───────────────────────────────────────────────────────────
+/**
+ * Computes a habitability score (0..1) for every coarse cell.
+ *
+ * Factors (applied in order):
+ *   1. Base geology productivity
+ *   2. Altitude modifier (full below treeline, ×0.3 above, ×0.1 well above)
+ *   3. Water access (×1.3 near river, ×1.2 near coast, ×0.6 if far from all water)
+ *   4. Animal bonus (up to +0.15 from food resource density)
+ *   5. Cave-wight suppression (×0.1 in core, ×0.5 in peripheral)
+ *   6. Water-lands override (raised/carr ground uses fishing/fowling base 0.3;
+ *      submerged/reed/mud cells are uninhabitable and score 0)
+ */
+export function computeCarryingCapacity(
+  terrain:   TerrainMap,
+  foodMap:   FoodResourceMap,
+  wightData: WightData
+): CarryingCapacity {
+  const { width, height, cells } = terrain;
+  const treeline = 0.45;
+  const highAlt  = 0.55;
 
-export function computeSettlements(
-  terrain: TerrainMap,
-  food: FoodResourceMap,
-  carrying: CarryingCapacity,
-  wights: WightData,
-): SettlementData {
-  const W = terrain.width, H = terrain.height;
-  const rng = makeRng("settlements" + terrain.seed, 3000);
-  const { habitability } = carrying;
+  const { nearRiver, nearCoast, grid: foodGrid } = foodMap;
 
-  // Minimum separation radii by size (in cells)
-  const SEP: Record<SettlementSize, number> = { homestead: 3, hamlet: 6, village: 12, town: 20 };
-  // Habitability thresholds for each size
-  const THRESH: Record<SettlementSize, number> = { town: 0.62, village: 0.48, hamlet: 0.30, homestead: 0.16 };
-  // Population ranges [min, max]
-  const POP: Record<SettlementSize, [number, number]> = {
-    town: [280, 600], village: [100, 280], hamlet: [30, 100], homestead: [8, 30]
-  };
-
-  const claimed = new Uint8Array(W * H); // 1 = too close to an existing settlement
-
-  const claimArea = (cx: number, cy: number, radius: number) => {
-    for (let dy = -radius; dy <= radius; dy++) {
-      for (let dx = -radius; dx <= radius; dx++) {
-        const nx = cx + dx, ny = cy + dy;
-        if (!inBounds(terrain, nx, ny)) continue;
-        if (Math.hypot(dx, dy) <= radius) claimed[idx(W, nx, ny)] = 1;
+  // ── Cave-wight suppression grid (1.0 = no suppression) ──────────────────────
+  const suppression = new Float32Array(width * height).fill(1.0);
+  for (const t of wightData.caveWights) {
+    if (!t.occupied) continue;
+    const maxR = t.peripheralRadius + 1;
+    const x0 = Math.max(0, t.cx - maxR);
+    const x1 = Math.min(width - 1, t.cx + maxR);
+    const y0 = Math.max(0, t.cy - maxR);
+    const y1 = Math.min(height - 1, t.cy + maxR);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const dist = Math.hypot(x - t.cx, y - t.cy);
+        const factor = dist <= t.coreRadius ? 0.10
+          : dist <= t.peripheralRadius      ? 0.50
+          : 1.0;
+        const idx = y * width + x;
+        if (factor < suppression[idx]) suppression[idx] = factor;
       }
     }
-  };
-
-  // Build candidate list sorted by habitability (descending)
-  const candidates: [number, number, number][] = [];
-  for (let y = 1; y < H-1; y++) {
-    for (let x = 1; x < W-1; x++) {
-      const h = habitability[idx(W, x, y)];
-      if (h > 0.14) candidates.push([h, x, y]);
-    }
-  }
-  candidates.sort((a, b) => b[0] - a[0]);
-
-  const settlements: ActiveSettlement[] = [];
-  const usedForTown = { placed: false };
-
-  for (const [h, x, y] of candidates) {
-    if (claimed[idx(W, x, y)]) continue;
-    const c = terrain.cells[y][x];
-    const isWL = isHabitableWaterLands(c);
-
-    let size: SettlementSize;
-    if (!usedForTown.placed && h >= THRESH.town) {
-      size = "town";
-      usedForTown.placed = true;
-    } else if (h >= THRESH.village && !isWL) {
-      size = "village";
-    } else if (h >= THRESH.hamlet) {
-      size = "hamlet";
-    } else {
-      size = "homestead";
-    }
-
-    // Limit counts
-    const counts = {
-      town: settlements.filter(s => s.size === "town").length,
-      village: settlements.filter(s => s.size === "village").length,
-      hamlet: settlements.filter(s => s.size === "hamlet").length,
-      homestead: settlements.filter(s => s.size === "homestead").length,
-    };
-    if (size === "town"      && counts.town      >= 3)  size = "village";
-    if (size === "village"   && counts.village   >= 18) size = "hamlet";
-    if (size === "hamlet"    && counts.hamlet    >= 80) size = "homestead";
-    if (size === "homestead" && counts.homestead >= 280) continue;
-
-    const [popMin, popMax] = POP[size];
-    const population = Math.floor(popMin + rng() * (popMax - popMin));
-    const sep = SEP[size];
-
-    // Walled town: largest settlement if in lowland chalk/limestone
-    const isWalledTown = size === "town" &&
-      (c.geology === GeologyType.Chalk || c.geology === GeologyType.Limestone) &&
-      c.altitude < 0.3 &&
-      settlements.filter(s => s.isWalledTown).length === 0;
-
-    settlements.push({ x, y, population, size, isWalledTown, isWaterLands: isWL });
-    claimArea(x, y, sep);
   }
 
-  // Fords: river cells between land masses, navigable crossing points
-  const fords: Ford[] = [];
-  const fordClaimed = new Set<number>();
-  for (let y = 2; y < H-2; y++) {
-    for (let x = 2; x < W-2; x++) {
-      const c = terrain.cells[y][x];
-      // A ford is a low-flow river cell adjacent to land on both sides (N/S or E/W)
-      if (c.riverFlow < 5 || c.riverFlow > 80) continue;
-      const nLand = isLand(terrain.cells[y-1][x]);
-      const sLand = isLand(terrain.cells[y+1][x]);
-      const wLand = isLand(terrain.cells[y][x-1]);
-      const eLand = isLand(terrain.cells[y][x+1]);
-      if ((!nLand || !sLand) && (!wLand || !eLand)) continue;
-      // Ensure not too close to another ford
-      let ok = true;
-      for (let dy = -4; dy <= 4; dy++) {
-        for (let dx = -4; dx <= 4; dx++) {
-          if (fordClaimed.has(idx(W, x+dx, y+dy))) { ok = false; break; }
+  // ── Per-cell habitability ────────────────────────────────────────────────────
+  const habitability = new Float32Array(width * height);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const cell = cells[y][x];
+      const { geology: geo, altitude: alt, waterLandsType } = cell;
+      const idx = y * width + x;
+
+      // Water and ice: not habitable
+      if (geo === GeologyType.Water || geo === GeologyType.Ice) continue;
+
+      let h: number;
+
+      // ── Water-lands: different model for raised / submerged ground ───────────
+      if (waterLandsType !== undefined) {
+        if (waterLandsType === 'raisedIsland' || waterLandsType === 'carrWoodland') {
+          // Habitable raised ground within water-lands: fishing/fowling base
+          h = 0.30;
+        } else {
+          // Reed bed, mud flat, open water, tidal channel: not habitable
+          continue;
         }
-        if (!ok) break;
+      } else {
+        // ── 1. Base geology productivity ──────────────────────────────────────
+        switch (geo) {
+          case GeologyType.Clay:      h = 1.00; break;
+          case GeologyType.Chalk:     h = 0.85; break;
+          case GeologyType.Limestone: h = 0.65; break;
+          case GeologyType.Sandstone: h = 0.45; break;
+          case GeologyType.Slate:     h = 0.35; break;
+          case GeologyType.Granite:   h = 0.20; break;
+          case GeologyType.Glacial:   h = 0.05; break;
+          default: h = 0;
+        }
+
+        // ── 2. Altitude modifier ───────────────────────────────────────────────
+        if (alt >= highAlt) {
+          h *= 0.10;
+        } else if (alt >= treeline) {
+          h *= 0.30;
+        }
+        // below treeline: no modifier (×1.0)
       }
-      if (!ok) continue;
-      fords.push({ x, y });
-      fordClaimed.add(idx(W, x, y));
+
+      // ── 3. Water access modifier ─────────────────────────────────────────────
+      const rDist = nearRiver[idx];
+      const cDist = nearCoast[idx];
+      if (rDist <= 3) {
+        h *= 1.30;
+      } else if (cDist <= 3) {
+        h *= 1.20;
+      } else if (rDist > 8 && cDist > 8) {
+        h *= 0.60;
+      }
+
+      // ── 4. Animal bonus (up to +0.15) ─────────────────────────────────────────
+      const food = foodGrid[idx];
+      const animalScore = Math.max(food.deer, food.fish, food.boar * 0.7);
+      h += animalScore * 0.15;
+
+      // ── 5. Cave-wight suppression ─────────────────────────────────────────────
+      h *= suppression[idx];
+
+      habitability[idx] = Math.min(1, Math.max(0, h));
     }
   }
 
-  // Abandoned settlements: margins and flood-risk zones
+  return { width, height, habitability };
+}
+
+// ---------------------------------------------------------------------------
+// Step 4: Permanent Settlements
+// ---------------------------------------------------------------------------
+
+export type SettlementSize = 'homestead' | 'hamlet' | 'village' | 'town';
+
+export interface Settlement {
+  x:               number;
+  y:               number;
+  population:      number;
+  size:            SettlementSize;
+  isWalledTown:    boolean;
+  isWaterLands:    boolean;
+  catchmentRadius: number;
+}
+
+export interface Ford {
+  x: number;
+  y: number;
+}
+
+export type AbandonedReason = 'waterRose' | 'iceAdvanced' | 'landMarginal';
+
+export interface AbandonedSettlement {
+  x:              number;
+  y:              number;
+  historicalSize: SettlementSize;
+  reason:         AbandonedReason;
+}
+
+export interface SettlementData {
+  settlements: Settlement[];
+  fords:       Ford[];
+  abandoned:   AbandonedSettlement[];
+}
+
+// ---------------------------------------------------------------------------
+// Ford identification
+// ---------------------------------------------------------------------------
+
+/**
+ * Scans for river cells that are shallow and crossable on foot.
+ * A ford: riverFlow in (RIVER_THRESHOLD, FORD_MAX_FLOW), and at least one
+ * orthogonal non-river neighbour whose altitude is within 0.02 of the
+ * river cell (low bank = shallow water).
+ */
+export function identifyFords(terrain: TerrainMap): Ford[] {
+  const { width, height, cells } = terrain;
+  const RIVER_MIN  =  80;
+  const FORD_MAX   = 300;
+  const fords: Ford[] = [];
+  const dirs: [number, number][] = [[0,-1],[0,1],[-1,0],[1,0]];
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const cell = cells[y][x];
+      if (cell.riverFlow <= RIVER_MIN || cell.riverFlow >= FORD_MAX) continue;
+      for (const [dx, dy] of dirs) {
+        const nx2 = x + dx, ny2 = y + dy;
+        if (nx2 < 0 || nx2 >= width || ny2 < 0 || ny2 >= height) continue;
+        const nb = cells[ny2][nx2];
+        if (nb.riverFlow > RIVER_MIN) continue; // skip river cells
+        if (Math.abs(nb.altitude - cell.altitude) < 0.02) {
+          fords.push({ x, y });
+          break;
+        }
+      }
+    }
+  }
+  return fords;
+}
+
+// ---------------------------------------------------------------------------
+// Settlement placement
+// ---------------------------------------------------------------------------
+
+/**
+ * Places permanent settlements using greedy catchment-claiming.
+ *
+ * Phase 1 — mainland: candidates scored by habitability, catchment average,
+ * ford/confluence/geology-boundary/coast bonuses. Placed highest-score-first;
+ * once a cell is claimed by a catchment no other settlement can use it.
+ *
+ * Phase 2 — water-lands: raised-ground cells within the water-lands zone,
+ * scored by island size, channel proximity, and food density.
+ *
+ * The first mainland settlement placed (highest score) is the walled town.
+ */
+export function computeSettlements(
+  terrain:   TerrainMap,
+  foodMap:   FoodResourceMap,
+  carrying:  CarryingCapacity,
+  wightData: WightData,
+): SettlementData {
+  const { width: w, height: h, cells } = terrain;
+  const { habitability } = carrying;
+  const { nearRiver, nearCoast, grid: foodGrid } = foodMap;
+
+  // ── Fords ──────────────────────────────────────────────────────────────────
+  const fords = identifyFords(terrain);
+  const fordSet = new Set(fords.map(f => f.y * w + f.x));
+
+  // ── Confluences ────────────────────────────────────────────────────────────
+  const confluenceSet = new Set<number>();
+  const dirs4: [number, number][] = [[0,-1],[0,1],[-1,0],[1,0]];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (cells[y][x].riverFlow <= 80) continue;
+      let rn = 0;
+      for (const [dx, dy] of dirs4) {
+        const nx2 = x + dx, ny2 = y + dy;
+        if (nx2 >= 0 && nx2 < w && ny2 >= 0 && ny2 < h && cells[ny2][nx2].riverFlow > 80) rn++;
+      }
+      if (rn >= 3) confluenceSet.add(y * w + x);
+    }
+  }
+
+  // ── BFS proximity maps ─────────────────────────────────────────────────────
+  const nearFord = bfsProximity(w, h, 5, i => fordSet.has(i));
+  const nearConfluence = bfsProximity(w, h, 4, i => confluenceSet.has(i));
+
+  const nearSpringLine = bfsProximity(w, h, 5, i => {
+    const x = i % w, y = (i - x) / w;
+    const geo = cells[y][x].geology;
+    if (geo !== GeologyType.Chalk && geo !== GeologyType.Clay) return false;
+    for (const [dx, dy] of dirs4) {
+      const nx2 = x + dx, ny2 = y + dy;
+      if (nx2 < 0 || nx2 >= w || ny2 < 0 || ny2 >= h) continue;
+      const nb = cells[ny2][nx2].geology;
+      if ((geo === GeologyType.Chalk && nb === GeologyType.Clay) ||
+          (geo === GeologyType.Clay  && nb === GeologyType.Chalk)) return true;
+    }
+    return false;
+  });
+
+  const nearGeoBoundary = bfsProximity(w, h, 3, i => {
+    const x = i % w, y = (i - x) / w;
+    const geo = cells[y][x].geology;
+    if (geo === GeologyType.Water || geo === GeologyType.Ice) return false;
+    for (const [dx, dy] of dirs4) {
+      const nx2 = x + dx, ny2 = y + dy;
+      if (nx2 < 0 || nx2 >= w || ny2 < 0 || ny2 >= h) continue;
+      const nb = cells[ny2][nx2].geology;
+      if (nb !== geo && nb !== GeologyType.Water && nb !== GeologyType.Ice) return true;
+    }
+    return false;
+  });
+
+  // ── Cave-wight core exclusion ──────────────────────────────────────────────
+  const inWightCore = new Uint8Array(w * h);
+  for (const t of wightData.caveWights) {
+    if (!t.occupied) continue;
+    const r = t.coreRadius;
+    for (let cy = Math.max(0, t.cy - r); cy <= Math.min(h - 1, t.cy + r); cy++) {
+      for (let cx = Math.max(0, t.cx - r); cx <= Math.min(w - 1, t.cx + r); cx++) {
+        if (Math.hypot(cx - t.cx, cy - t.cy) <= r) inWightCore[cy * w + cx] = 1;
+      }
+    }
+  }
+
+  // ── Score mainland candidates ──────────────────────────────────────────────
+  interface Candidate { x: number; y: number; score: number; avgHab: number }
+  const candidates: Candidate[] = [];
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx  = y * w + x;
+      const cell = cells[y][x];
+      const hab  = habitability[idx];
+
+      if (hab <= 0.10) continue;
+      if (cell.geology === GeologyType.Water || cell.geology === GeologyType.Ice) continue;
+      if (cell.waterLandsType !== undefined) continue;
+      if (inWightCore[idx]) continue;
+      if (nearRiver[idx] > 5 && nearSpringLine[idx] > 5 && nearCoast[idx] > 5) continue;
+
+      // Average habitability within 5-cell radius (hinterland quality)
+      let sumH = 0, cnt = 0;
+      for (let dy = -5; dy <= 5; dy++) {
+        for (let dx = -5; dx <= 5; dx++) {
+          if (dx * dx + dy * dy > 25) continue;
+          const nx2 = x + dx, ny2 = y + dy;
+          if (nx2 >= 0 && nx2 < w && ny2 >= 0 && ny2 < h) {
+            sumH += habitability[ny2 * w + nx2]; cnt++;
+          }
+        }
+      }
+      const avgHab = cnt > 0 ? sumH / cnt : 0;
+
+      let score = hab * 0.30 + avgHab * 0.70;
+      if (nearFord[idx]        <= 2) score += 0.30;
+      if (nearConfluence[idx]  <= 2) score += 0.20;
+      if (nearGeoBoundary[idx] <= 1) score += 0.10;
+      if (nearCoast[idx]       <= 3) score += 0.15;
+
+      candidates.push({ x, y, score, avgHab });
+    }
+  }
+  candidates.sort((a, b) => b.score - a.score);
+
+  // ── Tier-based greedy placement ────────────────────────────────────────────
+  interface Tier {
+    size:     SettlementSize;
+    maxCount: number;
+    minScore: number;
+    spacing:  number;
+    catchMin: number;
+    catchMax: number;
+    popBase:  number;
+    popRange: number;
+  }
+  const TIERS: Tier[] = [
+    { size: 'town',      maxCount:   1, minScore: 0.55, spacing: 30, catchMin: 25, catchMax: 30, popBase: 200, popRange: 100 },
+    { size: 'village',   maxCount:  30, minScore: 0.38, spacing: 20, catchMin: 15, catchMax: 20, popBase:  40, popRange:  60 },
+    { size: 'hamlet',    maxCount:  80, minScore: 0.25, spacing: 10, catchMin:  8, catchMax: 12, popBase:  20, popRange:  20 },
+    { size: 'homestead', maxCount: 600, minScore: 0.15, spacing:  5, catchMin:  4, catchMax:   6, popBase:   5, popRange:  10 },
+  ];
+
+  const claimed     = new Uint8Array(w * h);
+  const settlements: Settlement[] = [];
+
+  function claimCircle(cx: number, cy: number, r: number): void {
+    for (let dy = -r; dy <= r; dy++)
+      for (let dx = -r; dx <= r; dx++) {
+        if (dx * dx + dy * dy > r * r) continue;
+        const nx2 = cx + dx, ny2 = cy + dy;
+        if (nx2 >= 0 && nx2 < w && ny2 >= 0 && ny2 < h) claimed[ny2 * w + nx2] = 1;
+      }
+  }
+
+  function isTooClose(x: number, y: number, size: SettlementSize, minDist: number): boolean {
+    for (const s of settlements) {
+      if (s.isWaterLands) continue;
+      const relevant =
+        size === 'homestead' ? true
+        : size === 'hamlet'  ? s.size !== 'homestead'
+        : /* village / town */ (s.size === 'village' || s.size === 'town');
+      if (relevant && Math.hypot(s.x - x, s.y - y) < minDist) return true;
+    }
+    return false;
+  }
+
+  let ci = 0;
+  for (const tier of TIERS) {
+    let placed = 0;
+    while (ci < candidates.length && placed < tier.maxCount) {
+      const c = candidates[ci];
+      if (c.score < tier.minScore) break;
+      ci++;
+
+      if (claimed[c.y * w + c.x]) continue;
+      if (isTooClose(c.x, c.y, tier.size, tier.spacing)) continue;
+
+      const catchR = Math.round(tier.catchMin + (1 - c.avgHab) * (tier.catchMax - tier.catchMin));
+      claimCircle(c.x, c.y, catchR);
+
+      const pop = tier.popBase + Math.round(c.avgHab * tier.popRange);
+      settlements.push({
+        x: c.x, y: c.y, population: pop, size: tier.size,
+        isWalledTown: tier.size === 'town',
+        isWaterLands: false,
+        catchmentRadius: catchR,
+      });
+      placed++;
+    }
+  }
+
+  // ── Water-lands settlements ────────────────────────────────────────────────
+  const nearChannel = bfsProximity(w, h, 5, i => {
+    const x = i % w, y = (i - x) / w;
+    const wlt = cells[y][x].waterLandsType;
+    return wlt === 'openWater' || wlt === 'tidalChannel';
+  });
+
+  const wlCandidates: { x: number; y: number; score: number }[] = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const cell = cells[y][x];
+      if (cell.waterLandsType !== 'raisedIsland' && cell.waterLandsType !== 'carrWoodland') continue;
+      let islandCells = 0;
+      for (let dy = -3; dy <= 3; dy++) {
+        for (let dx = -3; dx <= 3; dx++) {
+          if (dx * dx + dy * dy > 9) continue;
+          const nx2 = x + dx, ny2 = y + dy;
+          if (nx2 < 0 || nx2 >= w || ny2 < 0 || ny2 >= h) continue;
+          const wlt = cells[ny2][nx2].waterLandsType;
+          if (wlt === 'raisedIsland' || wlt === 'carrWoodland') islandCells++;
+        }
+      }
+      if (islandCells < 2) continue;
+      const idx = y * w + x;
+      const food = foodGrid[idx];
+      const chDist = nearChannel[idx];
+      const chScore = chDist <= 1 ? 1.0 : chDist <= 3 ? 0.6 : chDist <= 5 ? 0.3 : 0;
+      wlCandidates.push({ x, y, score: (islandCells / 12) + chScore * 0.35 + food.fish * 0.30 + food.wildfowl * 0.20 });
+    }
+  }
+  wlCandidates.sort((a, b) => b.score - a.score);
+  for (const c of wlCandidates) {
+    if (settlements.some(s => s.isWaterLands && Math.hypot(s.x - c.x, s.y - c.y) < 5)) continue;
+    const idx = c.y * w + c.x;
+    const food = foodGrid[idx];
+    const pop = Math.max(10, Math.round((food.fish * 0.5 + food.wildfowl * 0.3 + 0.3) * 25));
+    settlements.push({ x: c.x, y: c.y, population: Math.min(pop, 30), size: 'hamlet',
+      isWalledTown: false, isWaterLands: true, catchmentRadius: 2 });
+    if (settlements.filter(s => s.isWaterLands).length >= 25) break;
+  }
+
+  // ── Abandoned settlements ──────────────────────────────────────────────────
+  const MIN_SCORE   = 0.25;
+  const SEA_LEVEL   = 0.22;
+  const HIST_SEA    = 0.19;
+
+  type HistCandidate = { x: number; y: number; histHab: number; reason: AbandonedReason };
+  const histCandidates: HistCandidate[] = [];
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = y * w + x;
+      if (claimed[idx]) continue;
+      const cell   = cells[y][x];
+      const curHab = habitability[idx];
+      const { geology: geo, altitude: alt, waterLandsType, ny } = cell;
+      let histHab: number, reason: AbandonedReason;
+
+      if (geo === GeologyType.Water && waterLandsType !== undefined) {
+        if (alt >= HIST_SEA && alt < SEA_LEVEL) { histHab = 0.36; reason = 'waterRose'; }
+        else continue;
+      } else if (geo === GeologyType.Water && cell.isCoast) {
+        if (alt >= HIST_SEA && alt < SEA_LEVEL) { histHab = 0.32; reason = 'waterRose'; }
+        else continue;
+      } else if (ny > 0.55 && curHab < MIN_SCORE && curHab > 0) {
+        histHab = curHab * 1.20;
+        reason  = ny > 0.60 ? 'iceAdvanced' : 'landMarginal';
+      } else if (curHab >= 0.20 && curHab < MIN_SCORE) {
+        histHab = curHab * 1.20;
+        reason  = 'landMarginal';
+      } else continue;
+
+      if (histHab <= MIN_SCORE) continue;
+      histCandidates.push({ x, y, histHab, reason });
+    }
+  }
+  histCandidates.sort((a, b) => b.histHab - a.histHab);
+
   const abandoned: AbandonedSettlement[] = [];
-  const NUM_ABANDONED = 25 + Math.floor(rng() * 20);
-  const abandClaim = new Set<number>();
-  let attempts = 0;
-  while (abandoned.length < NUM_ABANDONED && attempts < 5000) {
-    attempts++;
-    const ax = 2 + Math.floor(rng() * (W-4));
-    const ay = 2 + Math.floor(rng() * (H-4));
-    const ac = terrain.cells[ay][ax];
-    if (abandClaim.has(idx(W, ax, ay))) continue;
-
-    let reason: "waterRose" | "iceAdvanced" | "landMarginal" | null = null;
-    // Near water-lands edge → waterRose
-    if (ac.altitude < 0.08 && ac.geology !== GeologyType.Water) reason = "waterRose";
-    // Near glacial → iceAdvanced
-    else if (ac.geology === GeologyType.Glacial) reason = "iceAdvanced";
-    // High altitude marginal land
-    else if (ac.altitude > 0.55 && isLand(ac)) reason = "landMarginal";
-
-    if (!reason) continue;
-
-    const hSize = Math.random() < 0.6 ? "homestead"
-      : Math.random() < 0.7 ? "hamlet" : "village";
-
-    abandoned.push({ x: ax, y: ay, historicalSize: hSize as SettlementSize, reason });
-    for (let dy = -3; dy <= 3; dy++)
-      for (let dx = -3; dx <= 3; dx++)
-        abandClaim.add(idx(W, ax+dx, ay+dy));
+  for (const c of histCandidates) {
+    if (abandoned.length >= 15) break;
+    if (abandoned.some(a => Math.hypot(a.x - c.x, a.y - c.y) < 8)) continue;
+    const historicalSize: SettlementSize =
+      c.histHab >= 0.55 ? 'village' : c.histHab >= 0.40 ? 'hamlet' : 'homestead';
+    abandoned.push({ x: c.x, y: c.y, historicalSize, reason: c.reason });
   }
 
   return { settlements, fords, abandoned };
 }
 
-// ─── 5. PATH NETWORK ──────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Step 6: Path Network
+// ---------------------------------------------------------------------------
 
-/** Greedy path routing — moves toward target using terrain costs. */
-function routePath(
-  terrain: TerrainMap,
-  x0: number, y0: number,
-  x1: number, y1: number,
-  fordSet: Set<number>,
-): [number, number][] {
-  const W = terrain.width, H = terrain.height;
-
-  function moveCost(c: TerrainCell, fx: number, fy: number): number {
-    if (c.geology === GeologyType.Ice) return 999;
-    if (c.geology === GeologyType.Water) {
-      return fordSet.has(idx(W, fx, fy)) ? 2 : 40;
-    }
-    if (c.geology === GeologyType.Glacial) return 8;
-    return 1 + c.altitude * 4 + (c.riverFlow > 30 ? 3 : 0);
-  }
-
-  const maxSteps = Math.ceil(Math.hypot(x1-x0, y1-y0) * 4) + 50;
-  const pathCells: [number, number][] = [[x0, y0]];
-  const visited = new Set<number>();
-  visited.add(idx(W, x0, y0));
-
-  let cx = x0, cy = y0;
-
-  for (let step = 0; step < maxSteps; step++) {
-    if (cx === x1 && cy === y1) break;
-
-    let bestX = -1, bestY = -1, bestScore = Infinity;
-
-    for (const [dx, dy] of [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[-1,1],[1,-1],[1,1]]) {
-      const nx = cx + dx, ny = cy + dy;
-      if (!inBounds(terrain, nx, ny)) continue;
-      const c = terrain.cells[ny][nx];
-      const stepLen = (dx !== 0 && dy !== 0) ? 1.414 : 1;
-      const cost = moveCost(c, nx, ny) * stepLen;
-      const distToGoal = Math.hypot(nx - x1, ny - y1);
-      const revisitPenalty = visited.has(idx(W, nx, ny)) ? 25 : 0;
-      const score = distToGoal * 1.5 + cost + revisitPenalty;
-
-      if (score < bestScore) { bestScore = score; bestX = nx; bestY = ny; }
-    }
-
-    if (bestX < 0) break;
-    cx = bestX; cy = bestY;
-    visited.add(idx(W, cx, cy));
-    pathCells.push([cx, cy]);
-
-    // Early exit if close enough
-    if (Math.hypot(cx - x1, cy - y1) < 1.5) {
-      pathCells.push([x1, y1]);
-      break;
-    }
-  }
-
-  return pathCells;
+export interface PathSegment {
+  /** Sequence of [x, y] terrain-grid coordinates from source to destination. */
+  cells:   [number, number][];
+  /** Combined population of all settlements that route through this path. */
+  traffic: number;
+  fromIdx: number;  // index into settlements array
+  toIdx:   number;
 }
 
-export function computePathNetwork(terrain: TerrainMap, sd: SettlementData): PathNetwork {
-  const W = terrain.width;
-  const { settlements, fords } = sd;
+export interface PathNetwork {
+  paths: PathSegment[];
+}
 
-  const fordSet = new Set<number>(fords.map(f => idx(W, f.x, f.y)));
+// ── Binary min-heap ──────────────────────────────────────────────────────────
 
-  if (settlements.length < 2) return { paths: [] };
+class MinHeap {
+  private h: Float64Array;
+  private v: Int32Array;
+  private n = 0;
 
-  // Build connection list: each settlement connects to its nearest k neighbours
-  // Traffic = rough product of populations (with distance decay)
+  constructor(capacity = 32768) {
+    this.h = new Float64Array(capacity);
+    this.v = new Int32Array(capacity);
+  }
+  get size() { return this.n; }
+  clear() { this.n = 0; }
+
+  push(priority: number, value: number) {
+    let i = this.n++;
+    this.h[i] = priority;
+    this.v[i] = value;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (this.h[p] <= this.h[i]) break;
+      this._swap(i, p);
+      i = p;
+    }
+  }
+
+  pop(): { priority: number; value: number } {
+    const top = { priority: this.h[0], value: this.v[0] };
+    this.n--;
+    if (this.n > 0) {
+      this.h[0] = this.h[this.n];
+      this.v[0] = this.v[this.n];
+      let i = 0;
+      while (true) {
+        const l = 2*i+1, r = 2*i+2;
+        let s = i;
+        if (l < this.n && this.h[l] < this.h[s]) s = l;
+        if (r < this.n && this.h[r] < this.h[s]) s = r;
+        if (s === i) break;
+        this._swap(i, s);
+        i = s;
+      }
+    }
+    return top;
+  }
+
+  private _swap(a: number, b: number) {
+    const th = this.h[a]; this.h[a] = this.h[b]; this.h[b] = th;
+    const tv = this.v[a]; this.v[a] = this.v[b]; this.v[b] = tv;
+  }
+}
+
+// ── A* solver (arrays allocated once, reset via touched list) ────────────────
+
+class AStarSolver {
+  private readonly gCost:   Float32Array;
+  private readonly prev:    Int32Array;
+  private readonly closed:  Uint8Array;
+  private readonly w:       number;
+  private readonly h:       number;
+  private readonly heap:    MinHeap;
+
+  constructor(width: number, height: number) {
+    this.w      = width;
+    this.h      = height;
+    this.gCost  = new Float32Array(width * height).fill(Infinity);
+    this.prev   = new Int32Array(width * height).fill(-1);
+    this.closed = new Uint8Array(width * height);
+    this.heap   = new MinHeap(32768);
+  }
+
+  /**
+   * Finds the lowest-cost path from (x0,y0) to (x1,y1) using the movement
+   * cost model from the spec. Returns null if no path found within maxNodes.
+   */
+  solve(
+    terrain:  TerrainMap,
+    fordSet:  Set<number>,
+    x0: number, y0: number,
+    x1: number, y1: number,
+    maxNodes = 8000
+  ): [number, number][] | null {
+    const { w, h } = this;
+    const { cells } = terrain;
+    const gTouched: number[] = [];
+    const cTouched: number[] = [];
+
+    const start = y0 * w + x0;
+    const goal  = y1 * w + x1;
+    this.gCost[start] = 0;
+    gTouched.push(start);
+    this.heap.clear();
+    this.heap.push(Math.hypot(x0 - x1, y0 - y1), start);
+
+    // 8-directional movement; index 0,2,5,7 are diagonals
+    const DX = [-1, 0, 1, -1, 1, -1, 0, 1];
+    const DY = [-1,-1,-1,  0, 0,  1, 1, 1];
+    const BASE_COST = [Math.SQRT2,1,Math.SQRT2,1,1,Math.SQRT2,1,Math.SQRT2];
+
+    let expanded = 0;
+    let found    = false;
+
+    outer: while (this.heap.size > 0 && expanded < maxNodes) {
+      const { priority: f, value: idx } = this.heap.pop();
+      void f; // used only for ordering
+      if (this.closed[idx]) continue;
+      this.closed[idx] = 1;
+      cTouched.push(idx);
+      expanded++;
+
+      if (idx === goal) { found = true; break outer; }
+
+      const cx = idx % w;
+      const cy = (idx - cx) / w;
+      const gCurr = this.gCost[idx];
+      const fromAlt = cells[cy][cx].altitude;
+
+      for (let d = 0; d < 8; d++) {
+        const nx2 = cx + DX[d];
+        const ny2 = cy + DY[d];
+        if (nx2 < 0 || nx2 >= w || ny2 < 0 || ny2 >= h) continue;
+
+        const nIdx  = ny2 * w + nx2;
+        if (this.closed[nIdx]) continue;
+
+        const toCell = cells[ny2][nx2];
+        const toGeo  = toCell.geology;
+
+        // Movement cost
+        let cost = BASE_COST[d];
+        if (toGeo === GeologyType.Ice) {
+          cost = 999;
+        } else if (toGeo === GeologyType.Water) {
+          cost = fordSet.has(nIdx) ? 2.0 : 50.0;
+        } else {
+          cost *= 1 + Math.abs(toCell.altitude - fromAlt) * 15;
+          if (toGeo === GeologyType.Clay) cost *= 1.8;
+          else if (toGeo === GeologyType.Limestone || toGeo === GeologyType.Slate) cost *= 1.4;
+        }
+
+        const newG = gCurr + cost;
+        if (newG >= this.gCost[nIdx]) continue;
+        if (this.gCost[nIdx] === Infinity) gTouched.push(nIdx);
+        this.gCost[nIdx] = newG;
+        this.prev[nIdx]  = idx;
+        this.heap.push(newG + Math.hypot(nx2 - x1, ny2 - y1), nIdx);
+      }
+    }
+
+    // Reconstruct path
+    let result: [number, number][] | null = null;
+    if (found || this.gCost[goal] < Infinity) {
+      const path: [number, number][] = [];
+      let cur = goal;
+      while (cur !== -1) {
+        path.push([cur % w, Math.floor(cur / w)]);
+        cur = this.prev[cur];
+      }
+      result = path.reverse();
+    }
+
+    // Reset touched cells
+    for (const i of gTouched) { this.gCost[i] = Infinity; this.prev[i] = -1; }
+    for (const i of cTouched)   this.closed[i] = 0;
+
+    return result;
+  }
+}
+
+// ── Main path network function ───────────────────────────────────────────────
+
+/**
+ * Builds the path network connecting settlements across four phases:
+ *   Phase 1 — local A* connections to nearest 3 neighbours
+ *   Phase 2 — river bankside connections (settlements on same river, consecutive by altitude)
+ *   Phase 3 — ridgeline connections (settlements near the same E-W ridge)
+ *   Phase 4 — ford convergence (opposite-bank settlements routed through fords)
+ *
+ * Traffic is computed by BFS propagation: each settlement's population
+ * is added to every path reachable from it through the network.
+ */
+export function computePathNetwork(
+  terrain:        TerrainMap,
+  settlementData: SettlementData,
+): PathNetwork {
+  const { width: w, height: h } = terrain;
+  const { settlements, fords } = settlementData;
+  const land = settlements.map((s, i) => ({ s, i })).filter(({ s }) => !s.isWaterLands);
+
+  const fordSet = new Set(fords.map(f => f.y * w + f.x));
+  const astar   = new AStarSolver(w, h);
+
   const paths: PathSegment[] = [];
   const connected = new Set<string>();
+  const pairKey = (a: number, b: number) => a < b ? `${a}-${b}` : `${b}-${a}`;
 
-  const N = settlements.length;
+  function addPath(i: number, j: number, maxNodes = 10000): boolean {
+    const key = pairKey(i, j);
+    if (connected.has(key)) return false;
+    connected.add(key);
+    const si = settlements[i], sj = settlements[j];
+    const route = astar.solve(terrain, fordSet, si.x, si.y, sj.x, sj.y, maxNodes);
+    if (route) { paths.push({ cells: route, traffic: 0, fromIdx: i, toIdx: j }); return true; }
+    return false;
+  }
 
-  for (let i = 0; i < N; i++) {
-    const si = settlements[i];
-    // How many connections to make depends on size
-    const maxConn = si.size === "town" ? 6 : si.size === "village" ? 4 : si.size === "hamlet" ? 3 : 2;
-    const maxDist = si.size === "town" ? 120 : si.size === "village" ? 80 : 50;
-
-    // Find nearest settlements
-    type Neighbour = { j: number; dist: number };
-    const neighbours: Neighbour[] = [];
-    for (let j = 0; j < N; j++) {
-      if (j === i) continue;
-      const dist = Math.hypot(si.x - settlements[j].x, si.y - settlements[j].y);
-      if (dist <= maxDist) neighbours.push({ j, dist });
+  function findNearest(
+    from: { s: Settlement; i: number },
+    sizes: SettlementSize[],
+    maxDist: number,
+  ): { s: Settlement; i: number } | null {
+    let best: { s: Settlement; i: number } | null = null, bestD = Infinity;
+    for (const other of land) {
+      if (other.i === from.i || !sizes.includes(other.s.size)) continue;
+      const d = Math.hypot(other.s.x - from.s.x, other.s.y - from.s.y);
+      if (d < bestD && d <= maxDist) { bestD = d; best = other; }
     }
-    neighbours.sort((a, b) => a.dist - b.dist);
+    return best;
+  }
 
-    let connCount = 0;
-    for (const { j } of neighbours) {
-      if (connCount >= maxConn) break;
-      const key = i < j ? `${i}-${j}` : `${j}-${i}`;
-      if (connected.has(key)) { connCount++; continue; }
+  function findNearestK(
+    from: { s: Settlement; i: number },
+    sizes: SettlementSize[],
+    maxDist: number,
+    k: number,
+  ): { s: Settlement; i: number }[] {
+    return land
+      .filter(o => o.i !== from.i && sizes.includes(o.s.size))
+      .map(o => ({ o, d: Math.hypot(o.s.x - from.s.x, o.s.y - from.s.y) }))
+      .filter(({ d }) => d <= maxDist)
+      .sort((a, b) => a.d - b.d)
+      .slice(0, k)
+      .map(({ o }) => o);
+  }
 
-      const sj = settlements[j];
-      const dist = Math.hypot(si.x - sj.x, si.y - sj.y);
-      // Traffic: rough function of both populations and inverse distance
-      const traffic = Math.round((si.population + sj.population) * 0.5 * (1 / (1 + dist * 0.02)));
-
-      const cells = routePath(terrain, si.x, si.y, sj.x, sj.y, fordSet);
-      paths.push({ cells, traffic });
-      connected.add(key);
-      connCount++;
+  // ── Phase 1: Upward hierarchy connections ────────────────────────────────────
+  for (const entry of land) {
+    const { s, i } = entry;
+    if (s.size === 'homestead') {
+      const up = findNearest(entry, ['hamlet', 'village', 'town'], 50)
+               ?? findNearest(entry, ['homestead'], 30);
+      if (up) addPath(i, up.i);
+    } else if (s.size === 'hamlet') {
+      const up = findNearest(entry, ['village', 'town'], 80);
+      if (up) addPath(i, up.i);
+    } else if (s.size === 'village' && !s.isWalledTown) {
+      const town = land.find(o => o.s.isWalledTown);
+      if (town && Math.hypot(s.x - town.s.x, s.y - town.s.y) <= 150) addPath(i, town.i);
     }
+  }
+
+  // ── Phase 2: Lateral same-tier connections ───────────────────────────────────
+  for (const entry of land) {
+    if (entry.s.size === 'hamlet') {
+      for (const o of findNearestK(entry, ['hamlet'], 25, 2)) addPath(entry.i, o.i);
+    } else if (entry.s.size === 'village') {
+      for (const o of findNearestK(entry, ['village'], 60, 3)) addPath(entry.i, o.i);
+    }
+  }
+
+  // Walled town connects to its nearest 5 villages
+  const town = land.find(o => o.s.isWalledTown);
+  if (town) {
+    for (const o of findNearestK(town, ['village'], Infinity, 5)) addPath(town.i, o.i);
+  }
+
+  // ── Phase 3: Long-distance trade routes ──────────────────────────────────────
+  const major = land.filter(o => o.s.size === 'village' || o.s.size === 'town');
+  const tradePairs: { i: number; j: number; d: number }[] = [];
+  for (let a = 0; a < major.length; a++) {
+    for (let b = a + 1; b < major.length; b++) {
+      const d = Math.hypot(major[a].s.x - major[b].s.x, major[a].s.y - major[b].s.y);
+      if (d > 60 && !connected.has(pairKey(major[a].i, major[b].i)))
+        tradePairs.push({ i: major[a].i, j: major[b].i, d });
+    }
+  }
+  tradePairs.sort((a, b) => b.d - a.d);
+  let tradeCount = 0;
+  for (const { i, j } of tradePairs) {
+    if (tradeCount >= 5) break;
+    if (addPath(i, j, 15000)) tradeCount++;
+  }
+
+  // ── Phase 4: Ford connections (hamlet and above only) ────────────────────────
+  for (const ford of fords) {
+    const nearby = land
+      .filter(o => o.s.size !== 'homestead' && Math.hypot(o.s.x - ford.x, o.s.y - ford.y) <= 10)
+      .map(o => o.i);
+    for (let a = 0; a < nearby.length; a++) {
+      for (let b = a + 1; b < nearby.length; b++) {
+        const si = settlements[nearby[a]], sj = settlements[nearby[b]];
+        const sameX = (si.x - ford.x) * (sj.x - ford.x) >= 0;
+        const sameY = (si.y - ford.y) * (sj.y - ford.y) >= 0;
+        if (sameX && sameY) continue;
+        addPath(nearby[a], nearby[b], 12000);
+      }
+    }
+  }
+
+  // ── Traffic scoring ──────────────────────────────────────────────────────────
+  for (let pi = 0; pi < paths.length; pi++) {
+    const { fromIdx, toIdx } = paths[pi];
+    paths[pi].traffic = settlements[fromIdx].population + settlements[toIdx].population;
   }
 
   return { paths };
 }
 
-// ─── 6. SACRED SITES ──────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Step 7: Sacred Sites
+// ---------------------------------------------------------------------------
+
+export type MajorSacredType      = 'greatComplex' | 'stoneCircle' | 'henge';
+export type SignificantSacredType = 'standingStone' | 'barrow' | 'smallStoneCircle' | 'cairn';
+export type SmallSacredType      = 'markedStone' | 'sacredSpring' | 'offeringPool'
+                                 | 'caveEntrance' | 'sacredTree' | 'carvedRockFace';
+
+export interface MajorSacredSite {
+  x: number; y: number;
+  type: MajorSacredType;
+}
+
+export interface SignificantSacredSite {
+  x: number; y: number;
+  type: SignificantSacredType;
+}
+
+export interface SmallSacredFeature {
+  x: number; y: number;
+  type: SmallSacredType;
+  /** Minimum zoom level at which this feature is rendered. */
+  minZoom: number;
+}
+
+export interface SacredData {
+  major:       MajorSacredSite[];
+  significant: SignificantSacredSite[];
+  small:       SmallSacredFeature[];
+}
 
 export function computeSacredSites(
-  terrain: TerrainMap,
-  food: FoodResourceMap,
-  sd: SettlementData,
-  pn: PathNetwork,
-  wights: WightData,
-  seed: string,
+  terrain:        TerrainMap,
+  foodMap:        FoodResourceMap,
+  settlementData: SettlementData,
+  pathNetwork:    PathNetwork,
+  wightData:      WightData,
+  seed:           string,
 ): SacredData {
-  const W = terrain.width, H = terrain.height;
-  const rng = makeRng(seed, 6000);
-  const { settlements } = sd;
+  const { width: w, height: h, cells } = terrain;
+  const { nearRiver, nearCoast } = foodMap;
+  const { caveWights, smallFolk } = wightData;
+  const { paths } = pathNetwork;
+  const { random } = createSeededNoise(seed + '\0sacred');
 
-  const major: MajorSite[] = [];
-  const significant: SignificantSite[] = [];
-  const small: SmallSite[] = [];
+  const SEA_LEVEL = 0.22;
+  const DX4 = [-1, 1, 0, 0];
+  const DY4 = [ 0, 0,-1, 1];
+  const fi   = (x: number, y: number) => y * w + x;
+  const isLand = (x: number, y: number) => {
+    const g = cells[y][x].geology;
+    return g !== GeologyType.Water && g !== GeologyType.Ice;
+  };
 
-  const majorClaimed = new Set<number>();
-  const sigClaimed   = new Set<number>();
-  const smallClaimed = new Set<number>();
-
-  // ── Major sites: 2–6 henges/great complexes near large populations ──────────
-  // Sort settlements by population descending
-  const bigSettlements = settlements
-    .filter(s => s.size === "town" || s.size === "village")
-    .sort((a, b) => b.population - a.population);
-
-  const MAJOR_TYPES: MajorSiteType[] = ["greatComplex", "henge", "stoneCircle", "henge", "stoneCircle", "henge"];
-  const targetMajor = 2 + Math.floor(rng() * 4);
-
-  for (let attempt = 0; attempt < bigSettlements.length * 3 && major.length < targetMajor; attempt++) {
-    const base = bigSettlements[attempt % bigSettlements.length];
-    // Place on prominent ground nearby (slightly elevated, good viewshed)
-    const spread = 15 + Math.floor(rng() * 20);
-    const mx = Math.max(1, Math.min(W-2, base.x + Math.floor((rng()-0.5)*2*spread)));
-    const my = Math.max(1, Math.min(H-2, base.y + Math.floor((rng()-0.5)*2*spread)));
-    const mc = terrain.cells[my][mx];
-    if (!isLand(mc) || mc.altitude < 0.15) continue;
-    if (majorClaimed.has(idx(W, mx, my))) continue;
-    // Ensure some distance from other major sites
-    let ok = true;
-    for (const m of major) {
-      if (Math.hypot(m.x - mx, m.y - my) < 30) { ok = false; break; }
+  // ── Summed-area table for fast box-mean altitude queries ────────────────────
+  const SAT = new Float64Array((w + 1) * (h + 1));
+  for (let y = 1; y <= h; y++) {
+    for (let x = 1; x <= w; x++) {
+      SAT[y * (w + 1) + x] =
+        cells[y - 1][x - 1].altitude
+        + SAT[(y - 1) * (w + 1) + x]
+        + SAT[y * (w + 1) + (x - 1)]
+        - SAT[(y - 1) * (w + 1) + (x - 1)];
     }
-    if (!ok) continue;
-
-    major.push({ x: mx, y: my, type: MAJOR_TYPES[major.length % MAJOR_TYPES.length] });
-    for (let dy = -10; dy <= 10; dy++)
-      for (let dx = -10; dx <= 10; dx++)
-        majorClaimed.add(idx(W, mx+dx, my+dy));
   }
+  const boxMeanAlt = (cx2: number, cy2: number, r: number): number => {
+    const x1 = Math.max(0, cx2 - r), x2 = Math.min(w - 1, cx2 + r);
+    const y1 = Math.max(0, cy2 - r), y2 = Math.min(h - 1, cy2 + r);
+    const sum =
+      SAT[(y2 + 1) * (w + 1) + (x2 + 1)]
+      - SAT[y1 * (w + 1) + (x2 + 1)]
+      - SAT[(y2 + 1) * (w + 1) + x1]
+      + SAT[y1 * (w + 1) + x1];
+    return sum / ((x2 - x1 + 1) * (y2 - y1 + 1));
+  };
 
-  // ── Significant sites: barrows on hillsides, standing stones on ridgelines ──
-  const SIG_TYPES: SignificantSiteType[] = ["barrow","standingStone","barrow","cairn","smallStoneCircle","barrow","standingStone","cairn"];
-  const targetSig = 60 + Math.floor(rng() * 80);
-
-  for (let attempt = 0; attempt < targetSig * 6 && significant.length < targetSig; attempt++) {
-    const sx = 2 + Math.floor(rng() * (W-4));
-    const sy = 2 + Math.floor(rng() * (H-4));
-    const sc = terrain.cells[sy][sx];
-    if (!isLand(sc)) continue;
-    if (sigClaimed.has(idx(W, sx, sy))) continue;
-
-    const type = SIG_TYPES[Math.floor(rng() * SIG_TYPES.length)];
-    // Barrows: hillsides (0.2..0.55 altitude), near settlements
-    // Standing stones: any land, slightly elevated
-    // Cairns: high ground
-    if (type === "barrow" && (sc.altitude < 0.15 || sc.altitude > 0.60)) continue;
-    if (type === "cairn"  && sc.altitude < 0.40) continue;
-    if (type === "smallStoneCircle" && sc.altitude < 0.25) continue;
-
-    // Prefer proximity to a settlement (within 25 cells)
-    if (type === "barrow" || type === "standingStone") {
-      let nearSett = false;
-      for (const s of settlements) {
-        if (Math.hypot(s.x - sx, s.y - sy) < 25) { nearSett = true; break; }
+  // ── Geology boundary map (flat) ─────────────────────────────────────────────
+  const geoBoundary = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!isLand(x, y)) continue;
+      const g = cells[y][x].geology;
+      for (let d = 0; d < 4; d++) {
+        const nx2 = x + DX4[d], ny2 = y + DY4[d];
+        if (nx2 < 0 || nx2 >= w || ny2 < 0 || ny2 >= h) continue;
+        if (cells[ny2][nx2].geology !== g) { geoBoundary[fi(x, y)] = 1; break; }
       }
-      if (!nearSett && rng() > 0.3) continue;
-    }
-
-    significant.push({ x: sx, y: sy, type });
-    for (let dy = -4; dy <= 4; dy++)
-      for (let dx = -4; dx <= 4; dx++)
-        sigClaimed.add(idx(W, sx+dx, sy+dy));
-  }
-
-  // ── Small features ───────────────────────────────────────────────────────────
-  const targetSmall = 150 + Math.floor(rng() * 100);
-
-  // Sacred springs: chalk/limestone spring lines (where riverFlow begins)
-  for (let y = 1; y < H-1 && small.length < targetSmall * 0.25; y += 3) {
-    for (let x = 1; x < W-1; x += 3) {
-      const c = terrain.cells[y][x];
-      if (c.geology !== GeologyType.Chalk && c.geology !== GeologyType.Limestone) continue;
-      if (c.riverFlow < 1 || c.riverFlow > 15) continue;
-      if (rng() > 0.15) continue;
-      if (smallClaimed.has(idx(W, x, y))) continue;
-      small.push({ x, y, type: "sacredSpring", minZoom: 4 });
-      for (let dy = -3; dy <= 3; dy++)
-        for (let dx = -3; dx <= 3; dx++)
-          smallClaimed.add(idx(W, x+dx, y+dy));
     }
   }
 
-  // Offering pools: water-lands edges
-  for (let y = 1; y < H-1 && small.length < targetSmall * 0.4; y += 4) {
-    for (let x = 1; x < W-1; x += 4) {
-      const c = terrain.cells[y][x];
-      if (!c.isCoast && c.geology !== GeologyType.Water) continue;
-      if (c.waterLandsType !== "mudFlat" && c.waterLandsType !== "openWater" && !c.isCoast) continue;
-      if (rng() > 0.12) continue;
-      if (smallClaimed.has(idx(W, x, y))) continue;
-      small.push({ x, y, type: "offeringPool", minZoom: 5 });
-      for (let dy = -3; dy <= 3; dy++)
-        for (let dx = -3; dx <= 3; dx++)
-          smallClaimed.add(idx(W, x+dx, y+dy));
+  // ── Chalk escarpment ────────────────────────────────────────────────────────
+  const chalkEscarpment = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (cells[y][x].geology !== GeologyType.Chalk) continue;
+      const alt = cells[y][x].altitude;
+      for (let d = 0; d < 4; d++) {
+        const nx2 = x + DX4[d], ny2 = y + DY4[d];
+        if (nx2 < 0 || nx2 >= w || ny2 < 0 || ny2 >= h) continue;
+        const ng = cells[ny2][nx2].geology;
+        if ((ng === GeologyType.Limestone || ng === GeologyType.Clay) &&
+             cells[ny2][nx2].altitude > alt + 0.03) {
+          chalkEscarpment[fi(x, y)] = 1; break;
+        }
+      }
     }
   }
 
-  // Cave entrances: limestone/sandstone overhangs
-  for (let y = 2; y < H-2 && small.length < targetSmall * 0.55; y += 5) {
-    for (let x = 2; x < W-2; x += 5) {
-      const c = terrain.cells[y][x];
-      if (c.geology !== GeologyType.Limestone && c.geology !== GeologyType.Sandstone) continue;
-      if (c.altitude < 0.25 || c.altitude > 0.75) continue;
-      if (rng() > 0.10) continue;
-      if (smallClaimed.has(idx(W, x, y))) continue;
-      small.push({ x, y, type: "caveEntrance", minZoom: 5 });
-      for (let dy = -3; dy <= 3; dy++)
-        for (let dx = -3; dx <= 3; dx++)
-          smallClaimed.add(idx(W, x+dx, y+dy));
+  // ── Major-path BFS proximity (flat index) ───────────────────────────────────
+  const majorPathDist = new Int16Array(w * h).fill(32767);
+  {
+    const q: number[] = [];
+    for (const p of paths) {
+      if (p.traffic <= 500) continue;
+      for (const [px, py] of p.cells) {
+        const pi = fi(px, py);
+        if (majorPathDist[pi] === 32767) { majorPathDist[pi] = 0; q.push(pi); }
+      }
+    }
+    for (let qi = 0; qi < q.length; qi++) {
+      const ci = q[qi];
+      const nd = majorPathDist[ci] + 1;
+      if (nd > 20) continue;
+      const cx2 = ci % w, cy2 = (ci / w) | 0;
+      for (let d = 0; d < 4; d++) {
+        const nx2 = cx2 + DX4[d], ny2 = cy2 + DY4[d];
+        if (nx2 < 0 || nx2 >= w || ny2 < 0 || ny2 >= h) continue;
+        const ni = fi(nx2, ny2);
+        if (majorPathDist[ni] > nd) { majorPathDist[ni] = nd; q.push(ni); }
+      }
     }
   }
 
-  // Sacred trees: ancient forest (clay/limestone lowlands)
-  for (let y = 2; y < H-2 && small.length < targetSmall * 0.72; y += 6) {
-    for (let x = 2; x < W-2; x += 6) {
-      const c = terrain.cells[y][x];
-      if (c.geology !== GeologyType.Clay && c.geology !== GeologyType.Limestone) continue;
-      if (c.altitude > 0.30) continue;
-      if (rng() > 0.12) continue;
-      if (smallClaimed.has(idx(W, x, y))) continue;
-      small.push({ x, y, type: "sacredTree", minZoom: 6 });
-      for (let dy = -3; dy <= 3; dy++)
-        for (let dx = -3; dx <= 3; dx++)
-          smallClaimed.add(idx(W, x+dx, y+dy));
+  // ── River confluence ────────────────────────────────────────────────────────
+  const isConfluence = new Uint8Array(w * h);
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      if (cells[y][x].riverFlow <= 80) continue;
+      let rn = 0;
+      for (let d = 0; d < 4; d++) {
+        if (cells[y + DY4[d]][x + DX4[d]].riverFlow > 80) rn++;
+      }
+      if (rn >= 2) isConfluence[fi(x, y)] = 1;
     }
   }
 
-  // Carved rock faces: granite/sandstone outcrops
-  for (let y = 2; y < H-2 && small.length < targetSmall * 0.85; y += 6) {
-    for (let x = 2; x < W-2; x += 5) {
-      const c = terrain.cells[y][x];
-      if (c.geology !== GeologyType.Granite && c.geology !== GeologyType.Sandstone) continue;
-      if (c.altitude < 0.3) continue;
-      if (rng() > 0.08) continue;
-      if (smallClaimed.has(idx(W, x, y))) continue;
-      small.push({ x, y, type: "carvedRockFace", minZoom: 6 });
-      for (let dy = -3; dy <= 3; dy++)
-        for (let dx = -3; dx <= 3; dx++)
-          smallClaimed.add(idx(W, x+dx, y+dy));
+  // ── Wight territory helpers ──────────────────────────────────────────────────
+  const inCaveWightCore = (x: number, y: number) =>
+    caveWights.some(t => t.occupied && Math.hypot(x - t.cx, y - t.cy) < t.coreRadius);
+  const inCaveWightPeriphery = (x: number, y: number) =>
+    caveWights.some(t => t.occupied && Math.hypot(x - t.cx, y - t.cy) < t.peripheralRadius);
+  const nearSmallFolk = (x: number, y: number) =>
+    smallFolk.some(t => t.occupied && Math.hypot(x - t.cx, y - t.cy) < t.radius + 3);
+
+  // ── Spacing check ────────────────────────────────────────────────────────────
+  const spaceOk = (placed: { x: number; y: number }[], x: number, y: number, minDist: number) =>
+    placed.every(p => Math.hypot(p.x - x, p.y - y) >= minDist);
+
+  // ── MAJOR SACRED SITES ───────────────────────────────────────────────────────
+  interface Cand { x: number; y: number; score: number }
+  const majorCands: Cand[] = [];
+  for (let y = 3; y < h - 3; y += 3) {
+    for (let x = 3; x < w - 3; x += 3) {
+      if (!isLand(x, y) || cells[y][x].waterLandsType || inCaveWightCore(x, y)) continue;
+      const alt = cells[y][x].altitude;
+      const prominence = Math.max(0, alt - boxMeanAlt(x, y, 20));
+      let score = prominence * 3.5;
+      if (geoBoundary[fi(x, y)])                             score += 0.30;
+      if (chalkEscarpment[fi(x, y)])                         score += 0.25;
+      if (majorPathDist[fi(x, y)] < 15)  score += 0.20 * (1 - majorPathDist[fi(x, y)] / 15);
+      if (inCaveWightPeriphery(x, y))                        score += 0.15;
+      if (isConfluence[fi(x, y)])                            score += 0.10;
+      if (score > 0.15) majorCands.push({ x, y, score });
+    }
+  }
+  majorCands.sort((a, b) => b.score - a.score);
+
+  const major: MajorSacredSite[] = [];
+  const targetMajor = 3 + Math.floor(random() * 3); // 3–5
+  for (const c of majorCands) {
+    if (major.length >= targetMajor) break;
+    if (!spaceOk(major, c.x, c.y, 22)) continue;
+    const type: MajorSacredType = major.length === 0 ? 'greatComplex'
+      : random() < 0.5 ? 'stoneCircle' : 'henge';
+    major.push({ x: c.x, y: c.y, type });
+  }
+
+  // ── SIGNIFICANT SACRED SITES ─────────────────────────────────────────────────
+  const allPlaced: { x: number; y: number }[] = [...major];
+  const sigCands: Cand[] = [];
+  for (let y = 2; y < h - 2; y += 2) {
+    for (let x = 2; x < w - 2; x += 2) {
+      if (!isLand(x, y) || cells[y][x].waterLandsType || inCaveWightCore(x, y)) continue;
+      const prominence = Math.max(0, cells[y][x].altitude - boxMeanAlt(x, y, 8));
+      let score = prominence * 2.5;
+      if (chalkEscarpment[fi(x, y)])                                          score += 0.35;
+      if (geoBoundary[fi(x, y)])                                              score += 0.20;
+      if (isConfluence[fi(x, y)])                                             score += 0.20;
+      if (nearCoast[fi(x, y)] <= 2 &&
+          (cells[y][x].geology === GeologyType.Granite ||
+           cells[y][x].geology === GeologyType.Slate))                        score += 0.25;
+      if (inCaveWightPeriphery(x, y))                                         score += 0.15;
+      if (score > 0.05) sigCands.push({ x, y, score });
+    }
+  }
+  sigCands.sort((a, b) => b.score - a.score);
+
+  const significant: SignificantSacredSite[] = [];
+  const targetSig = 20 + Math.floor(random() * 21); // 20–40
+
+  // Region coverage tracking (4 cols × 6 rows = 24 regions)
+  const RGSX = 4, RGSY = 6;
+  const rgCount = new Int32Array(RGSX * RGSY);
+
+  const placeSig = (c: Cand, minSpacing: number): boolean => {
+    if (!spaceOk(allPlaced, c.x, c.y, minSpacing)) return false;
+    const geo = cells[c.y][c.x].geology;
+    const r   = random();
+    let type: SignificantSacredType;
+    if (chalkEscarpment[fi(c.x, c.y)]) {
+      type = 'barrow';
+    } else if (geo === GeologyType.Granite) {
+      type = r < 0.7 ? 'cairn' : 'standingStone';
+    } else if (geo === GeologyType.Limestone) {
+      type = r < 0.5 ? 'smallStoneCircle' : 'standingStone';
+    } else if (geo === GeologyType.Chalk) {
+      type = r < 0.6 ? 'barrow' : 'standingStone';
+    } else {
+      type = r < 0.4 ? 'standingStone' : r < 0.7 ? 'barrow' : r < 0.85 ? 'cairn' : 'smallStoneCircle';
+    }
+    significant.push({ x: c.x, y: c.y, type });
+    allPlaced.push({ x: c.x, y: c.y });
+    const rgx = Math.min(RGSX - 1, (c.x / w * RGSX) | 0);
+    const rgy = Math.min(RGSY - 1, (c.y / h * RGSY) | 0);
+    rgCount[rgy * RGSX + rgx]++;
+    return true;
+  };
+
+  for (const c of sigCands) {
+    if (significant.length >= targetSig) break;
+    placeSig(c, 8);
+  }
+
+  // Coverage pass: ensure every region has ≥ 1 significant site
+  for (let rgy = 0; rgy < RGSY; rgy++) {
+    for (let rgx = 0; rgx < RGSX; rgx++) {
+      if (rgCount[rgy * RGSX + rgx] > 0) continue;
+      const xMin = (rgx       * w / RGSX) | 0;
+      const xMax = ((rgx + 1) * w / RGSX) | 0;
+      const yMin = (rgy       * h / RGSY) | 0;
+      const yMax = ((rgy + 1) * h / RGSY) | 0;
+      for (const c of sigCands) {
+        if (c.x < xMin || c.x >= xMax || c.y < yMin || c.y >= yMax) continue;
+        if (placeSig(c, 5)) break;
+      }
     }
   }
 
-  // Marked stones: granite/slate — scattered widely
-  for (let y = 3; y < H-3 && small.length < targetSmall; y += 7) {
-    for (let x = 3; x < W-3; x += 7) {
-      const c = terrain.cells[y][x];
-      if (c.geology !== GeologyType.Granite && c.geology !== GeologyType.Slate) continue;
-      if (rng() > 0.18) continue;
-      if (smallClaimed.has(idx(W, x, y))) continue;
-      small.push({ x, y, type: "markedStone", minZoom: 7 });
-      for (let dy = -3; dy <= 3; dy++)
-        for (let dx = -3; dx <= 3; dx++)
-          smallClaimed.add(idx(W, x+dx, y+dy));
+  // ── SMALL SACRED FEATURES ────────────────────────────────────────────────────
+  interface SmallCand { x: number; y: number; type: SmallSacredType; minZoom: number; score: number }
+  const smallCands: SmallCand[] = [];
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const c = cells[y][x];
+      if (!isLand(x, y) || c.altitude <= SEA_LEVEL || c.waterLandsType) continue;
+      const geo = c.geology;
+      const alt = c.altitude;
+      const fIdx = fi(x, y);
+      const sfBoost = nearSmallFolk(x, y) ? 0.35 : 0;
+
+      // Spring lines: geology boundary near river
+      if (geoBoundary[fIdx] && nearRiver[fIdx] <= 3 &&
+          (geo === GeologyType.Chalk || geo === GeologyType.Clay ||
+           geo === GeologyType.Limestone)) {
+        smallCands.push({ x, y, type: 'sacredSpring', minZoom: 5,
+          score: 0.6 + sfBoost + random() * 0.2 });
+      }
+
+      // Cave entrances: limestone, moderate altitude, terrain complexity
+      if (geo === GeologyType.Limestone && alt >= 0.28 && alt <= 0.50) {
+        const variance = Math.abs(alt - boxMeanAlt(x, y, 3));
+        if (variance > 0.015) {
+          smallCands.push({ x, y, type: 'caveEntrance', minZoom: 5,
+            score: 0.5 + variance * 5 + random() * 0.2 });
+        }
+      }
+
+      // Glacial erratics
+      if (geo === GeologyType.Glacial) {
+        smallCands.push({ x, y, type: 'markedStone', minZoom: 10,
+          score: 0.3 + random() * 0.3 });
+      }
+
+      // Offering pools: cell lower than all 8 neighbours, near river or limestone
+      {
+        let isPool = true;
+        outer:
+        for (let dy2 = -1; dy2 <= 1; dy2++) {
+          for (let dx2 = -1; dx2 <= 1; dx2++) {
+            if (dx2 === 0 && dy2 === 0) continue;
+            const nx2 = x + dx2, ny2 = y + dy2;
+            if (nx2 < 0 || nx2 >= w || ny2 < 0 || ny2 >= h) { isPool = false; break outer; }
+            if (cells[ny2][nx2].altitude <= alt) { isPool = false; break outer; }
+          }
+        }
+        if (isPool && (nearRiver[fIdx] <= 4 || geo === GeologyType.Limestone)) {
+          smallCands.push({ x, y, type: 'offeringPool', minZoom: 5,
+            score: 0.5 + sfBoost + random() * 0.2 });
+        }
+      }
+
+      // Small hilltops: local altitude maximum at moderate altitude
+      {
+        let isHilltop = true;
+        outer:
+        for (let dy2 = -1; dy2 <= 1; dy2++) {
+          for (let dx2 = -1; dx2 <= 1; dx2++) {
+            if (dx2 === 0 && dy2 === 0) continue;
+            const nx2 = x + dx2, ny2 = y + dy2;
+            if (nx2 < 0 || nx2 >= w || ny2 < 0 || ny2 >= h) continue;
+            if (cells[ny2][nx2].altitude >= alt) { isHilltop = false; break outer; }
+          }
+        }
+        if (isHilltop && alt >= 0.28 && alt < 0.70) {
+          let type: SmallSacredType;
+          if (geo === GeologyType.Sandstone)                               type = 'markedStone';
+          else if (geo === GeologyType.Granite || geo === GeologyType.Slate) type = 'carvedRockFace';
+          else if (geo === GeologyType.Clay)                               type = 'sacredTree';
+          else                                                             type = 'markedStone';
+          smallCands.push({ x, y, type, minZoom: 5,
+            score: 0.4 + boxMeanAlt(x, y, 4) * 0.5 + random() * 0.2 });
+        }
+      }
+
+      // Sandstone boundary outcrops
+      if (geo === GeologyType.Sandstone && geoBoundary[fIdx]) {
+        smallCands.push({ x, y, type: 'markedStone', minZoom: 10,
+          score: 0.25 + random() * 0.25 });
+      }
     }
+  }
+
+  smallCands.sort((a, b) => b.score - a.score);
+  const targetSmall = 80 + Math.floor(random() * 71); // 80–150
+  const allPlacedSmall: { x: number; y: number }[] = [...allPlaced];
+  const small: SmallSacredFeature[] = [];
+
+  for (const c of smallCands) {
+    if (small.length >= targetSmall) break;
+    if (!spaceOk(allPlacedSmall, c.x, c.y, 4)) continue;
+    small.push({ x: c.x, y: c.y, type: c.type, minZoom: c.minZoom });
+    allPlacedSmall.push({ x: c.x, y: c.y });
   }
 
   return { major, significant, small };
 }
 
-// ─── 7. SEASONAL CAMPS ────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Step 8: Seasonal Camps
+// ---------------------------------------------------------------------------
+
+export type SeasonalCampType =
+  | 'grazingCamp' | 'fishingCamp' | 'gatheringCamp'
+  | 'flintMiningCamp' | 'tradingSite';
+
+export interface SeasonalCamp {
+  x: number;
+  y: number;
+  type: SeasonalCampType;
+  /** For grazing camps: index into SettlementData.settlements. */
+  parentSettlementIdx?: number;
+}
+
+export interface SeasonalData {
+  camps: SeasonalCamp[];
+}
 
 export function computeSeasonalCamps(
-  terrain: TerrainMap,
-  food: FoodResourceMap,
-  sd: SettlementData,
-  pn: PathNetwork,
-  sacred: SacredData,
-  seed: string,
+  terrain:        TerrainMap,
+  foodMap:        FoodResourceMap,
+  settlementData: SettlementData,
+  pathNetwork:    PathNetwork,
+  sacredData:     SacredData,
+  seed:           string,
 ): SeasonalData {
-  const W = terrain.width, H = terrain.height;
-  const rng = makeRng(seed, 7000);
+  const { width: w, height: h, cells } = terrain;
+  const { nearRiver, nearCoast } = foodMap;
+  const { settlements } = settlementData;
+  const { paths } = pathNetwork;
+  const { random } = createSeededNoise(seed + '\0seasonal');
+
+  const SEA_LEVEL = 0.22;
+  const TREELINE  = 0.45;
+  const DX4 = [-1, 1, 0, 0];
+  const DY4 = [ 0, 0,-1, 1];
+  const fi = (x: number, y: number) => y * w + x;
   const camps: SeasonalCamp[] = [];
-  const campClaimed = new Set<number>();
 
-  const claim = (x: number, y: number, r = 5) => {
-    for (let dy = -r; dy <= r; dy++)
-      for (let dx = -r; dx <= r; dx++)
-        if (inBounds(terrain, x+dx, y+dy) && Math.hypot(dx,dy) <= r)
-          campClaimed.add(idx(W, x+dx, y+dy));
-  };
+  const spaceOk = (placed: { x: number; y: number }[], x: number, y: number, d: number) =>
+    placed.every(p => Math.hypot(p.x - x, p.y - y) >= d);
 
-  // Upland grazing camps: chalk/limestone above 0.3 altitude
-  for (let y = 3; y < H-3; y += 8) {
-    for (let x = 3; x < W-3; x += 8) {
-      const c = terrain.cells[y][x];
-      if (c.geology !== GeologyType.Chalk && c.geology !== GeologyType.Limestone) continue;
-      if (c.altitude < 0.30 || c.altitude > 0.65) continue;
-      if (rng() > 0.25) continue;
-      if (campClaimed.has(idx(W, x, y))) continue;
-      camps.push({ x, y, type: "grazingCamp" });
-      claim(x, y);
+  // ── BFS: distance to nearest settlement ─────────────────────────────────────
+  const settDist = new Int16Array(w * h).fill(32767);
+  {
+    const q: number[] = [];
+    for (const s of settlements) {
+      const i = fi(s.x, s.y);
+      if (settDist[i] === 32767) { settDist[i] = 0; q.push(i); }
+    }
+    for (let qi = 0; qi < q.length; qi++) {
+      const ci = q[qi], nd = settDist[ci] + 1;
+      if (nd > 15) continue;
+      const cx = ci % w, cy = (ci / w) | 0;
+      for (let d = 0; d < 4; d++) {
+        const nx2 = cx + DX4[d], ny2 = cy + DY4[d];
+        if (nx2 < 0 || nx2 >= w || ny2 < 0 || ny2 >= h) continue;
+        const ni = fi(nx2, ny2);
+        if (settDist[ni] > nd) { settDist[ni] = nd; q.push(ni); }
+      }
     }
   }
 
-  // Fishing camps: river banks with good flow, or coast
-  for (let y = 3; y < H-3; y += 7) {
-    for (let x = 3; x < W-3; x += 7) {
-      const c = terrain.cells[y][x];
-      if (c.riverFlow < 20 && !c.isCoast) continue;
-      if (!isLand(c)) continue;
-      if (rng() > 0.20) continue;
-      if (campClaimed.has(idx(W, x, y))) continue;
-      camps.push({ x, y, type: "fishingCamp" });
-      claim(x, y);
+  // ── BFS: distance to nearest path cell ──────────────────────────────────────
+  const pathDist = new Int16Array(w * h).fill(32767);
+  {
+    const q: number[] = [];
+    for (const p of paths) {
+      for (const [px, py] of p.cells) {
+        const pi = fi(px, py);
+        if (pathDist[pi] === 32767) { pathDist[pi] = 0; q.push(pi); }
+      }
+    }
+    for (let qi = 0; qi < q.length; qi++) {
+      const ci = q[qi], nd = pathDist[ci] + 1;
+      if (nd > 8) continue;
+      const cx = ci % w, cy = (ci / w) | 0;
+      for (let d = 0; d < 4; d++) {
+        const nx2 = cx + DX4[d], ny2 = cy + DY4[d];
+        if (nx2 < 0 || nx2 >= w || ny2 < 0 || ny2 >= h) continue;
+        const ni = fi(nx2, ny2);
+        if (pathDist[ni] > nd) { pathDist[ni] = nd; q.push(ni); }
+      }
     }
   }
 
-  // Gathering camps: forest clearings (clay/limestone, moderate altitude)
-  for (let y = 3; y < H-3; y += 9) {
-    for (let x = 3; x < W-3; x += 9) {
-      const c = terrain.cells[y][x];
-      if (c.geology !== GeologyType.Clay && c.geology !== GeologyType.Limestone) continue;
-      if (c.altitude > 0.35) continue;
-      if (food.grid[idx(W, x, y)].deer < 0.35) continue;
-      if (rng() > 0.18) continue;
-      if (campClaimed.has(idx(W, x, y))) continue;
-      camps.push({ x, y, type: "gatheringCamp" });
-      claim(x, y);
+  // ── 1. UPLAND GRAZING CAMPS ─────────────────────────────────────────────────
+  const grazingPlaced: { x: number; y: number }[] = [];
+  for (let si = 0; si < settlements.length; si++) {
+    const s = settlements[si];
+    if (s.isWaterLands) continue;
+    if (cells[s.y][s.x].altitude >= TREELINE) continue;
+    let bestX = -1, bestY = -1, bestScore = -Infinity;
+    for (let dy = -8; dy <= 8; dy++) {
+      for (let dx = -8; dx <= 8; dx++) {
+        if (Math.hypot(dx, dy) > 8) continue;
+        const nx2 = s.x + dx, ny2 = s.y + dy;
+        if (nx2 < 0 || nx2 >= w || ny2 < 0 || ny2 >= h) continue;
+        const c = cells[ny2][nx2];
+        if (c.geology === GeologyType.Water || c.geology === GeologyType.Ice) continue;
+        if (c.altitude < TREELINE) continue;
+        const score = c.altitude + (nearRiver[fi(nx2, ny2)] <= 3 ? 0.2 : 0);
+        if (score > bestScore) { bestScore = score; bestX = nx2; bestY = ny2; }
+      }
+    }
+    if (bestX >= 0 && spaceOk(grazingPlaced, bestX, bestY, 3)) {
+      camps.push({ x: bestX, y: bestY, type: 'grazingCamp', parentSettlementIdx: si });
+      grazingPlaced.push({ x: bestX, y: bestY });
     }
   }
 
-  // Flint mining camps: chalk (surface flint)
-  for (let y = 4; y < H-4; y += 10) {
-    for (let x = 4; x < W-4; x += 10) {
-      const c = terrain.cells[y][x];
+  // ── 2. FISHING CAMPS ────────────────────────────────────────────────────────
+  interface FC { x: number; y: number; score: number }
+  const fishingCands: FC[] = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const c = cells[y][x];
+      if (c.riverFlow < 120) continue;
+      if (settDist[fi(x, y)] < 5) continue;
+      let rn = 0;
+      for (let d = 0; d < 4; d++) {
+        const nx2 = x + DX4[d], ny2 = y + DY4[d];
+        if (nx2 >= 0 && nx2 < w && ny2 >= 0 && ny2 < h && cells[ny2][nx2].riverFlow > 80) rn++;
+      }
+      const confluence = rn >= 2;
+      const tidal = nearCoast[fi(x, y)] <= 10;
+      if (!confluence && !tidal && c.riverFlow < 250) continue;
+      fishingCands.push({
+        x, y,
+        score: Math.min(1, c.riverFlow / 400) + (confluence ? 0.4 : 0) + (tidal ? 0.3 : 0),
+      });
+    }
+  }
+  fishingCands.sort((a, b) => b.score - a.score);
+  const targetFishing = 10 + Math.floor(random() * 11);
+  const fishPlaced: { x: number; y: number }[] = [];
+  for (const c of fishingCands) {
+    if (fishPlaced.length >= targetFishing) break;
+    if (!spaceOk(fishPlaced, c.x, c.y, 8)) continue;
+    camps.push({ x: c.x, y: c.y, type: 'fishingCamp' });
+    fishPlaced.push({ x: c.x, y: c.y });
+  }
+
+  // ── 3. GATHERING CAMPS ──────────────────────────────────────────────────────
+  const gatherCands: FC[] = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const c = cells[y][x];
+      if (c.geology !== GeologyType.Clay) continue;
+      if (c.altitude <= SEA_LEVEL || c.altitude >= TREELINE) continue;
+      if (settDist[fi(x, y)] < 6) continue;
+      if (pathDist[fi(x, y)] > 6) continue;
+      gatherCands.push({ x, y, score: (1 - c.altitude / TREELINE) * 0.5 + random() * 0.5 });
+    }
+  }
+  gatherCands.sort((a, b) => b.score - a.score);
+  const targetGather = 15 + Math.floor(random() * 11);
+  const gatherPlaced: { x: number; y: number }[] = [];
+  for (const c of gatherCands) {
+    if (gatherPlaced.length >= targetGather) break;
+    if (!spaceOk(gatherPlaced, c.x, c.y, 5)) continue;
+    camps.push({ x: c.x, y: c.y, type: 'gatheringCamp' });
+    gatherPlaced.push({ x: c.x, y: c.y });
+  }
+
+  // ── 4. FLINT-MINING CAMPS ───────────────────────────────────────────────────
+  const flintCands: FC[] = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const c = cells[y][x];
       if (c.geology !== GeologyType.Chalk) continue;
-      if (c.altitude < 0.15 || c.altitude > 0.5) continue;
-      if (rng() > 0.20) continue;
-      if (campClaimed.has(idx(W, x, y))) continue;
-      camps.push({ x, y, type: "flintMiningCamp" });
-      claim(x, y);
+      if (c.altitude < 0.28 || c.altitude > 0.55) continue;
+      flintCands.push({ x, y, score: c.altitude + random() * 0.2 });
     }
+  }
+  flintCands.sort((a, b) => b.score - a.score);
+  const targetFlint = 2 + Math.floor(random() * 3);
+  const flintPlaced: { x: number; y: number }[] = [];
+  for (const c of flintCands) {
+    if (flintPlaced.length >= targetFlint) break;
+    if (!spaceOk(flintPlaced, c.x, c.y, 15)) continue;
+    camps.push({ x: c.x, y: c.y, type: 'flintMiningCamp' });
+    flintPlaced.push({ x: c.x, y: c.y });
   }
 
-  // Trading sites: path network crossroads
-  // Find cells that appear in multiple paths
-  const pathCount = new Map<number, number>();
-  for (const p of pn.paths) {
-    if (p.traffic < 40) continue;
-    for (const [px, py] of p.cells) {
-      const k = idx(W, px, py);
-      pathCount.set(k, (pathCount.get(k) ?? 0) + 1);
+  // ── 5. TRADING GATHERING SITES ──────────────────────────────────────────────
+  const majorConns = new Int32Array(settlements.length);
+  for (const p of paths) {
+    if (p.traffic <= 500) continue;
+    majorConns[p.fromIdx]++;
+    majorConns[p.toIdx]++;
+  }
+  const tradingCands: FC[] = [];
+  for (let si = 0; si < settlements.length; si++) {
+    if (majorConns[si] >= 3) {
+      tradingCands.push({
+        x: settlements[si].x, y: settlements[si].y,
+        score: majorConns[si] * 0.3 + random() * 0.1,
+      });
     }
   }
-  for (const [k, count] of pathCount) {
-    if (count < 2) continue;
-    const x = k % W, y = (k / W) | 0;
-    const c = terrain.cells[y][x];
-    if (!isLand(c)) continue;
-    if (campClaimed.has(k)) continue;
-    if (rng() > 0.4) continue;
-    camps.push({ x, y, type: "tradingSite" });
-    claim(x, y, 6);
+  for (const ms of sacredData.major) {
+    tradingCands.push({ x: ms.x, y: ms.y, score: 0.8 + random() * 0.2 });
+  }
+  tradingCands.sort((a, b) => b.score - a.score);
+  const targetTrading = 3 + Math.floor(random() * 4);
+  const tradingPlaced: { x: number; y: number }[] = [];
+  for (const c of tradingCands) {
+    if (tradingPlaced.length >= targetTrading) break;
+    if (!spaceOk(tradingPlaced, c.x, c.y, 10)) continue;
+    camps.push({ x: c.x, y: c.y, type: 'tradingSite' });
+    tradingPlaced.push({ x: c.x, y: c.y });
   }
 
   return { camps };
 }
 
-// ─── 8. HUNTING CIRCUITS ──────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Step 9: Hunting Group Circuits
+// ---------------------------------------------------------------------------
+
+export type HuntingSeason = 'spring' | 'summer' | 'autumn' | 'winter';
+
+export interface HuntingWaypoint {
+  x: number;
+  y: number;
+  season: HuntingSeason;
+}
+
+export interface HuntingCircuit {
+  waypoints:  HuntingWaypoint[];
+  groupSize:  number;
+  /** Routed A* path cells for the full loop. Not rendered, stored for reference. */
+  pathCells:  [number, number][];
+}
+
+export interface HuntingData {
+  circuits: HuntingCircuit[];
+}
 
 export function computeHuntingCircuits(
-  terrain: TerrainMap,
-  food: FoodResourceMap,
-  sd: SettlementData,
-  seed: string,
+  terrain:        TerrainMap,
+  foodMap:        FoodResourceMap,
+  settlementData: SettlementData,
+  seed:           string,
 ): HuntingData {
-  const W = terrain.width, H = terrain.height;
-  const rng = makeRng(seed, 8000);
-  const circuits: HuntingCircuit[] = [];
+  const { width: w, height: h, cells } = terrain;
+  const { nearRiver, grid: foodGrid } = foodMap;
+  const { settlements, fords } = settlementData;
+  const { random } = createSeededNoise(seed + '\0hunting');
 
-  // Only homesteads and hamlets generate hunting circuits
-  const huntingSettlements = sd.settlements.filter(s => s.size === "homestead" || s.size === "hamlet");
+  const SEA_LEVEL = 0.22;
+  const TREELINE  = 0.45;
+  const DX4 = [-1, 1, 0, 0];
+  const DY4 = [ 0, 0,-1, 1];
+  const fi = (x: number, y: number) => y * w + x;
 
-  for (const base of huntingSettlements) {
-    if (rng() > 0.55) continue; // not every settlement has an active circuit
-    if (circuits.length > 120) break;
+  const fordSet = new Set(fords.map(f => fi(f.x, f.y)));
+  const astar   = new AStarSolver(w, h);
 
-    const radius = 8 + Math.floor(rng() * 12);
-    const numWaypoints = 3 + Math.floor(rng() * 4);
-    const waypoints: HuntingWaypoint[] = [];
-    const pathCells: [number, number][] = [];
-
-    // Build waypoints in deer-rich land around the settlement
-    for (let w = 0; w < numWaypoints * 4 && waypoints.length < numWaypoints; w++) {
-      const angle = (waypoints.length / numWaypoints) * Math.PI * 2 + rng() * 0.8;
-      const dist  = radius * 0.4 + rng() * radius * 0.6;
-      const wx = Math.round(base.x + Math.cos(angle) * dist);
-      const wy = Math.round(base.y + Math.sin(angle) * dist);
-      if (!inBounds(terrain, wx, wy)) continue;
-      const c = terrain.cells[wy][wx];
-      if (!isLand(c)) continue;
-      const f = food.grid[idx(W, wx, wy)];
-      if (f.deer < 0.25) continue;
-      waypoints.push({ x: wx, y: wy });
+  // ── Settlement distance BFS ─────────────────────────────────────────────────
+  const settDist = new Int16Array(w * h).fill(32767);
+  {
+    const q: number[] = [];
+    for (const s of settlements) {
+      const i = fi(s.x, s.y);
+      if (settDist[i] === 32767) { settDist[i] = 0; q.push(i); }
     }
-
-    if (waypoints.length < 2) continue;
-
-    // Build path cells: straight-line approximation between waypoints
-    const allPoints = [{ x: base.x, y: base.y }, ...waypoints, { x: base.x, y: base.y }];
-    for (let i = 0; i < allPoints.length - 1; i++) {
-      const a = allPoints[i], b = allPoints[i+1];
-      const steps = Math.ceil(Math.hypot(b.x-a.x, b.y-a.y));
-      for (let s = 0; s <= steps; s++) {
-        const fx = Math.round(a.x + (b.x-a.x) * s / steps);
-        const fy = Math.round(a.y + (b.y-a.y) * s / steps);
-        if (inBounds(terrain, fx, fy)) pathCells.push([fx, fy]);
+    for (let qi = 0; qi < q.length; qi++) {
+      const ci = q[qi], nd = settDist[ci] + 1;
+      if (nd > 20) continue;
+      const cx = ci % w, cy = (ci / w) | 0;
+      for (let d = 0; d < 4; d++) {
+        const nx2 = cx + DX4[d], ny2 = cy + DY4[d];
+        if (nx2 < 0 || nx2 >= w || ny2 < 0 || ny2 >= h) continue;
+        const ni = fi(nx2, ny2);
+        if (settDist[ni] > nd) { settDist[ni] = nd; q.push(ni); }
       }
     }
+  }
 
-    const groupSize = 3 + Math.floor(rng() * 10);
-    circuits.push({ groupSize, pathCells, waypoints });
+  // ── Circuit centre candidates: remote, granite/slate/deep-clay terrain ───────
+  interface Ctr { x: number; y: number; score: number }
+  const ctrCands: Ctr[] = [];
+  for (let y = 5; y < h - 5; y += 4) {
+    for (let x = 5; x < w - 5; x += 4) {
+      const c = cells[y][x];
+      if (c.geology === GeologyType.Water || c.geology === GeologyType.Ice) continue;
+      if (c.altitude <= SEA_LEVEL) continue;
+      if (settDist[fi(x, y)] < 8) continue;
+      let geoScore: number;
+      if      (c.geology === GeologyType.Granite)  geoScore = 0.9;
+      else if (c.geology === GeologyType.Slate)    geoScore = 0.8;
+      else if (c.geology === GeologyType.Glacial)  geoScore = 0.6;
+      else if (c.geology === GeologyType.Clay && c.altitude < 0.40) geoScore = 0.5;
+      else if (c.geology === GeologyType.Sandstone) geoScore = 0.4;
+      else continue;
+      const isolation = Math.min(1, settDist[fi(x, y)] / 15);
+      ctrCands.push({ x, y, score: geoScore * 0.5 + isolation * 0.5 });
+    }
+  }
+  ctrCands.sort((a, b) => b.score - a.score);
+
+  // ── Best-cell search within a radius ────────────────────────────────────────
+  const findWaypoint = (
+    cx: number, cy: number, r: number,
+    scoreFn: (x: number, y: number) => number,
+    minScore: number,
+  ): { x: number; y: number } | null => {
+    let bestX = -1, bestY = -1, best = minScore;
+    for (let dy = -r; dy <= r; dy += 2) {
+      for (let dx = -r; dx <= r; dx += 2) {
+        if (Math.hypot(dx, dy) > r) continue;
+        const nx2 = cx + dx, ny2 = cy + dy;
+        if (nx2 < 0 || nx2 >= w || ny2 < 0 || ny2 >= h) continue;
+        const s = scoreFn(nx2, ny2);
+        if (s > best) { best = s; bestX = nx2; bestY = ny2; }
+      }
+    }
+    return bestX >= 0 ? { x: bestX, y: bestY } : null;
+  };
+
+  const isUnwalkable = (x: number, y: number) => {
+    const g = cells[y][x].geology;
+    return g === GeologyType.Water || g === GeologyType.Ice;
+  };
+
+  const circuits: HuntingCircuit[] = [];
+  const target = 5 + Math.floor(random() * 6); // 5–10
+  const placedCtrs: { x: number; y: number }[] = [];
+  const SEARCH_R = 25;
+
+  for (const ctr of ctrCands) {
+    if (circuits.length >= target) break;
+    if (placedCtrs.some(p => Math.hypot(p.x - ctr.x, p.y - ctr.y) < 20)) continue;
+
+    // Spring: river bank with good fish
+    const spring = findWaypoint(ctr.x, ctr.y, SEARCH_R, (x, y) => {
+      const c = cells[y][x];
+      if (isUnwalkable(x, y) || c.altitude <= SEA_LEVEL) return -1;
+      if (c.riverFlow < 80) return -1;
+      return foodGrid[fi(x, y)].fish + (nearRiver[fi(x, y)] <= 2 ? 0.3 : 0);
+    }, 0.2);
+
+    // Summer: high ground, deer-rich
+    const summer = findWaypoint(ctr.x, ctr.y, SEARCH_R, (x, y) => {
+      const c = cells[y][x];
+      if (isUnwalkable(x, y) || c.altitude < 0.38) return -1;
+      return foodGrid[fi(x, y)].deer + (c.altitude - 0.38) * 2;
+    }, 0.3);
+
+    // Autumn: oak forest (clay/limestone), boar-rich
+    const autumn = findWaypoint(ctr.x, ctr.y, SEARCH_R, (x, y) => {
+      const c = cells[y][x];
+      if (c.geology !== GeologyType.Clay && c.geology !== GeologyType.Limestone) return -1;
+      if (c.altitude <= SEA_LEVEL || c.altitude >= TREELINE) return -1;
+      return foodGrid[fi(x, y)].boar;
+    }, 0.15);
+
+    // Winter: sheltered valley, deer and firewood
+    const winter = findWaypoint(ctr.x, ctr.y, SEARCH_R, (x, y) => {
+      const c = cells[y][x];
+      if (isUnwalkable(x, y) || c.altitude <= SEA_LEVEL || c.altitude > 0.35) return -1;
+      return foodGrid[fi(x, y)].deer + (nearRiver[fi(x, y)] <= 4 ? 0.2 : 0);
+    }, 0.15);
+
+    if (!spring || !summer || !autumn || !winter) continue;
+
+    // Waypoints must be reasonably distinct from each other
+    const wps = [spring, summer, autumn, winter];
+    let distinct = true;
+    for (let a = 0; a < wps.length && distinct; a++)
+      for (let b = a + 1; b < wps.length && distinct; b++)
+        if (Math.hypot(wps[a].x - wps[b].x, wps[a].y - wps[b].y) < 5) distinct = false;
+    if (!distinct) continue;
+
+    // At least one waypoint within 10 cells of a settlement (trade contact)
+    const hasContact = wps.some(wp =>
+      settlements.some(s => Math.hypot(s.x - wp.x, s.y - wp.y) <= 10)
+    );
+    if (!hasContact) continue;
+
+    // Route A* around the loop: spring → summer → autumn → winter → spring
+    const allPathCells: [number, number][] = [];
+    const legPairs: [{ x: number; y: number }, { x: number; y: number }][] = [
+      [spring, summer], [summer, autumn], [autumn, winter], [winter, spring],
+    ];
+    for (const [from, to] of legPairs) {
+      const leg = astar.solve(terrain, fordSet, from.x, from.y, to.x, to.y, 5000);
+      if (leg) allPathCells.push(...leg);
+    }
+
+    circuits.push({
+      waypoints: [
+        { x: spring.x, y: spring.y, season: 'spring' },
+        { x: summer.x, y: summer.y, season: 'summer' },
+        { x: autumn.x, y: autumn.y, season: 'autumn' },
+        { x: winter.x, y: winter.y, season: 'winter' },
+      ],
+      groupSize: 8 + Math.floor(random() * 13), // 8–20
+      pathCells: allPathCells,
+    });
+    placedCtrs.push({ x: ctr.x, y: ctr.y });
   }
 
   return { circuits };
 }
 
-// ─── 9. VALIDATION ────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Step 10: Validation
+// ---------------------------------------------------------------------------
 
-export function validateHabitation(
-  terrain: TerrainMap,
-  sd: SettlementData,
-  pn: PathNetwork,
-  sacred: SacredData,
-): ValidationReport {
-  const { settlements, fords, abandoned } = sd;
-  const summary: string[] = [];
-
-  const totalPop = settlements.reduce((n, s) => n + s.population, 0);
-  const bySz = (sz: SettlementSize) => settlements.filter(s => s.size === sz).length;
-  const walled = settlements.filter(s => s.isWalledTown);
-  const waterLands = settlements.filter(s => s.isWaterLands);
-
-  summary.push(`Total population: ~${totalPop.toLocaleString()}`);
-  summary.push(`Settlements: ${settlements.length} total — ${bySz("town")} towns, ${bySz("village")} villages, ${bySz("hamlet")} hamlets, ${bySz("homestead")} homesteads`);
-  if (walled.length > 0) {
-    summary.push(`Walled town at (${walled[0].x}, ${walled[0].y}) pop ${walled[0].population}`);
-  }
-  if (waterLands.length > 0) summary.push(`Water-lands communities: ${waterLands.length}`);
-  summary.push(`Abandoned sites: ${abandoned.length} (${abandoned.filter(a => a.reason === "waterRose").length} flooded, ${abandoned.filter(a => a.reason === "iceAdvanced").length} iced, ${abandoned.filter(a => a.reason === "landMarginal").length} marginal)`);
-  summary.push(`Fords: ${fords.length}`);
-  summary.push(`Path network: ${pn.paths.length} segments`);
-  const maxTraffic = pn.paths.reduce((m, p) => Math.max(m, p.traffic), 0);
-  summary.push(`Peak path traffic: ${maxTraffic}`);
-  summary.push(`Sacred: ${sacred.major.length} major, ${sacred.significant.length} significant, ${sacred.small.length} small sites`);
-
-  // Checks
-  if (totalPop < 5000)  summary.push("⚠ Population seems low");
-  if (totalPop > 200000) summary.push("⚠ Population seems high");
-  if (settlements.filter(s => s.size === "town").length === 0) summary.push("⚠ No towns generated");
-  if (sacred.major.length === 0) summary.push("⚠ No major sacred sites");
-
-  return { summary };
+export interface ValidationReport {
+  /** Settlements that were isolated and received a new connecting path. */
+  connectivityFixes: number;
+  totalPopulation:   number;
+  populationInRange: boolean;
+  /** Regions in the 4×6 grid that have no significant sacred site. */
+  coverageGaps:      { rgx: number; rgy: number }[];
+  densityGradientOk: boolean;
+  summary:           string[];
 }
 
-// ─── LEGACY FUNCTION (kept for game package compatibility) ────────────────────
+export function validateHabitation(
+  terrain:        TerrainMap,
+  settlementData: SettlementData,
+  pathNetwork:    PathNetwork,
+  sacredData:     SacredData,
+): ValidationReport {
+  const { width: w, height: h, cells } = terrain;
+  const { settlements, fords } = settlementData;
+  const { paths } = pathNetwork;
+  const summary: string[] = [];
 
-export function generateHabitation(terrain: TerrainMap, noise: unknown): HabitationData {
-  const seed = (terrain as TerrainMap & { seed?: string }).seed ?? "default";
-  const food     = computeFoodResources(terrain, seed);
-  const wights   = generateWightTerritories(terrain, seed);
-  const carrying = computeCarryingCapacity(terrain, food, wights);
-  const sd       = computeSettlements(terrain, food, carrying, wights);
-  const pn       = computePathNetwork(terrain, sd);
+  // ── 1. CONNECTIVITY CHECK ────────────────────────────────────────────────────
+  const n = settlements.length;
+  const adj: Set<number>[] = Array.from({ length: n }, () => new Set<number>());
+  for (const p of paths) {
+    adj[p.fromIdx].add(p.toIdx);
+    adj[p.toIdx].add(p.fromIdx);
+  }
 
-  const settlements: Settlement[] = sd.settlements.map(s => ({
-    x: s.x, y: s.y, population: s.population, size: s.size,
-  }));
-  const sacredData = computeSacredSites(terrain, food, sd, pn, wights, seed);
-  const sacredSites: SacredSite[] = [
-    ...sacredData.major.map(s => ({ x: s.x, y: s.y, type: s.type, tier: "major" as const })),
-    ...sacredData.significant.map(s => ({ x: s.x, y: s.y, type: s.type, tier: "significant" as const })),
-    ...sacredData.small.map(s => ({ x: s.x, y: s.y, type: s.type, tier: "small" as const })),
-  ];
-  const paths: Path[] = pn.paths;
+  // BFS from settlement 0; find all reachable.
+  const reached = new Uint8Array(n);
+  const bfsQ: number[] = [];
+  if (n > 0) {
+    reached[0] = 1; bfsQ.push(0);
+    for (let qi = 0; qi < bfsQ.length; qi++)
+      for (const nb of adj[bfsQ[qi]])
+        if (!reached[nb]) { reached[nb] = 1; bfsQ.push(nb); }
+  }
 
-  return { settlements, sacredSites, paths };
+  const fordSet = new Set(fords.map(f => f.y * w + f.x));
+  const astar   = new AStarSolver(w, h);
+  let connectivityFixes = 0;
+
+  for (let si = 0; si < n; si++) {
+    if (reached[si]) continue;
+    let bestDist = Infinity, bestIdx = -1;
+    for (let ri = 0; ri < n; ri++) {
+      if (!reached[ri]) continue;
+      const d = Math.hypot(settlements[si].x - settlements[ri].x,
+                           settlements[si].y - settlements[ri].y);
+      if (d < bestDist) { bestDist = d; bestIdx = ri; }
+    }
+    if (bestIdx < 0) continue;
+    const from = settlements[si], to = settlements[bestIdx];
+    const route = astar.solve(terrain, fordSet, from.x, from.y, to.x, to.y, 12000);
+    if (!route) continue;
+    const traffic = (from.population + to.population) * 0.5;
+    paths.push({ cells: route, traffic, fromIdx: si, toIdx: bestIdx });
+    adj[si].add(bestIdx); adj[bestIdx].add(si);
+    reached[si] = 1; bfsQ.length = 0; bfsQ.push(si);
+    for (let qi = 0; qi < bfsQ.length; qi++)
+      for (const nb of adj[bfsQ[qi]])
+        if (!reached[nb]) { reached[nb] = 1; bfsQ.push(nb); }
+    connectivityFixes++;
+  }
+
+  summary.push(connectivityFixes > 0
+    ? `Connectivity: fixed ${connectivityFixes} isolated settlement(s).`
+    : 'Connectivity: all settlements reachable. ✓');
+
+  // ── 2. POPULATION CHECK ──────────────────────────────────────────────────────
+  const totalPopulation = settlements.reduce((s, t) => s + t.population, 0);
+  const populationInRange = totalPopulation >= 5_000 && totalPopulation <= 250_000;
+  summary.push(populationInRange
+    ? `Population: ${totalPopulation.toLocaleString()} ✓`
+    : `Population: ${totalPopulation.toLocaleString()} — outside expected range.`);
+
+  // ── 3. COVERAGE CHECK ────────────────────────────────────────────────────────
+  const RGSX = 4, RGSY = 6;
+  const sigCoverage   = new Uint8Array(RGSX * RGSY);
+  const smallCoverage = new Int32Array(RGSX * RGSY);
+
+  for (const s of sacredData.significant) {
+    const rgx = Math.min(RGSX - 1, (s.x / w * RGSX) | 0);
+    const rgy = Math.min(RGSY - 1, (s.y / h * RGSY) | 0);
+    sigCoverage[rgy * RGSX + rgx] = 1;
+  }
+  for (const s of sacredData.small) {
+    const rgx = Math.min(RGSX - 1, (s.x / w * RGSX) | 0);
+    const rgy = Math.min(RGSY - 1, (s.y / h * RGSY) | 0);
+    smallCoverage[rgy * RGSX + rgx]++;
+  }
+
+  const coverageGaps: { rgx: number; rgy: number }[] = [];
+  for (let rgy = 0; rgy < RGSY; rgy++)
+    for (let rgx = 0; rgx < RGSX; rgx++)
+      if (!sigCoverage[rgy * RGSX + rgx]) coverageGaps.push({ rgx, rgy });
+
+  if (coverageGaps.length === 0) {
+    summary.push('Sacred coverage: all 24 regions have significant sites. ✓');
+  } else {
+    const gaps = coverageGaps.map(g => `(col ${g.rgx} row ${g.rgy})`).join(', ');
+    summary.push(`Sacred coverage: ${coverageGaps.length} region(s) without significant sites: ${gaps}.`);
+  }
+
+  const minSmall = Math.min(...Array.from(smallCoverage));
+  const maxSmall = Math.max(...Array.from(smallCoverage));
+  summary.push(`Small sacred features: ${minSmall}–${maxSmall} per region.`);
+
+  // ── 4. DENSITY GRADIENT CHECK ────────────────────────────────────────────────
+  let northCount = 0, southCount = 0, uplandCount = 0, lowlandCount = 0;
+  for (const s of settlements) {
+    if (s.isWaterLands) continue;
+    if (s.y < h / 2) northCount++; else southCount++;
+    if (cells[s.y][s.x].altitude >= 0.38) uplandCount++; else lowlandCount++;
+  }
+  const densityGradientOk = southCount >= northCount && lowlandCount >= uplandCount;
+  summary.push(
+    `Density: south ${southCount} vs north ${northCount}, lowland ${lowlandCount} vs upland ${uplandCount}` +
+    (densityGradientOk ? ' ✓' : ' — gradient inverted.'),
+  );
+
+  return { connectivityFixes, totalPopulation, populationInRange, coverageGaps, densityGradientOk, summary };
 }
