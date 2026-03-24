@@ -1,22 +1,14 @@
-import { Fragment, STARTER_FRAGMENTS } from "./fragments";
+import { Fragment } from "./fragments";
+import BUNDLED_FRAGMENTS from "./fragments.json";
 
-const STORAGE_KEY = "barrow-voice-fragments";
 const API_KEY_STORAGE = "barrow-voice-api-key";
 
 export function loadFragments(): Fragment[] {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored) {
-    try {
-      return JSON.parse(stored) as Fragment[];
-    } catch { /* fall through */ }
-  }
-  // First run — seed with starters
-  saveFragments(STARTER_FRAGMENTS);
-  return [...STARTER_FRAGMENTS];
+  return BUNDLED_FRAGMENTS as Fragment[];
 }
 
-export function saveFragments(fragments: Fragment[]): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(fragments));
+export function saveFragments(_fragments: Fragment[]): void {
+  // No-op: fragments are bundled from fragments.json, not stored in localStorage.
 }
 
 export function loadApiKey(): string {
