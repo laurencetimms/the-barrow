@@ -47,31 +47,47 @@ function scoreFragment(fragment: Fragment, situation: Situation): number {
 }
 
 /**
+ * Weighted random selection from a scored pool.
+ * Probability is proportional to score², so better matches are more likely
+ * but not guaranteed — prevents any single fragment dominating stable contexts.
+ * Already-selected fragment ids are excluded from subsequent draws.
+ */
+function weightedSelect(
+  pool: { fragment: Fragment; score: number }[],
+  count: number,
+  excludeIds: string[],
+): { fragment: Fragment; score: number }[] {
+  const available = pool.filter(f => !excludeIds.includes(f.fragment.id));
+  const selected: { fragment: Fragment; score: number }[] = [];
+
+  for (let i = 0; i < count && available.length > 0; i++) {
+    const totalWeight = available.reduce((sum, f) => sum + f.score * f.score, 0);
+    let roll = Math.random() * totalWeight;
+    let pick = 0;
+    for (let j = 0; j < available.length; j++) {
+      roll -= available[j].score * available[j].score;
+      if (roll <= 0) { pick = j; break; }
+    }
+    selected.push(available.splice(pick, 1)[0]);
+  }
+
+  return selected;
+}
+
+/**
  * Select the best-matching fragments for a situation.
- * Returns 2-4 fragments, scored and sorted.
+ * @param excludeIds Fragment ids to exclude (recency filter — pass recent turn ids).
  */
 export function matchFragments(
   fragments: Fragment[],
   situation: Situation,
-  count: number = 4
+  count: number = 4,
+  excludeIds: string[] = [],
 ): { fragment: Fragment; score: number }[] {
   const scored = fragments
     .map(f => ({ fragment: f, score: scoreFragment(f, situation) }))
     .filter(f => f.score > 0)
     .sort((a, b) => b.score - a.score);
 
-  // Take top matches, but add some variety — don't always take the top N
-  // Instead, take the top 1-2 and randomly sample from the next tier
-  if (scored.length <= count) return scored;
-
-  const result = scored.slice(0, Math.min(2, count));
-  const remaining = scored.slice(2);
-
-  while (result.length < count && remaining.length > 0) {
-    // Weight toward higher scores but allow some randomness
-    const idx = Math.floor(Math.random() * Math.min(remaining.length, 6));
-    result.push(remaining.splice(idx, 1)[0]);
-  }
-
-  return result;
+  return weightedSelect(scored, count, excludeIds);
 }

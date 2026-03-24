@@ -45,6 +45,8 @@ export interface GameState {
   prevContext: PerceptualContext | null;
   /** Last 3 generated description texts, for the LLM "do not repeat" context */
   recentDescriptions: string[];
+  /** IDs of the last 15 fragments used — passed to matcher as exclusion list */
+  recentFragmentIds: string[];
   /** Visited-cell freshness grid (one byte per terrain cell, 0=unseen, 255=current) */
   visitedGrid: Uint8Array;
   /** Walk-count grid (one byte per terrain cell, caps at 255) */
@@ -70,6 +72,7 @@ export function createInitialState(
     tarryCount: 0,
     prevContext: null,
     recentDescriptions: [],
+    recentFragmentIds: [],
     visitedGrid:   new Uint8Array(total),
     walkCountGrid: new Uint8Array(total),
     memoryAnchors: [],

@@ -182,7 +182,7 @@ function updateStatus(world: WorldQuery, state: GameState): void {
     snow: "Snow", frost: "Frost", haze: "Haze",
   };
   statusBar.textContent =
-    `${world.geoInfo.label} · ${world.altitudeMetres}m · ${seasonLabel} · ${timeLabel} · ${weatherLabels[state.weather.type] ?? state.weather.type}`;
+    `${world.geoInfo.label} · ${world.altitudeMetres}m · ${seasonLabel} · ${timeLabel} · ${weatherLabels[state.weather.type] ?? state.weather.type} · ${state.position.x},${state.position.y}`;
 }
 
 // ─── Memory map ──────────────────────────────────────────────────
@@ -266,31 +266,35 @@ function appendOpeningLine(text: string, color: string): void {
 }
 
 /** Generate the opening landscape description via the normal voice pipeline. */
-async function generateOpeningDescription(): Promise<string> {
-  if (!terrain || !gameState) return "The chalk is white underfoot. Sky above. Wind from the west.";
+async function generateOpeningDescription(): Promise<{ text: string; fragmentIds: string[] }> {
+  if (!terrain || !gameState) {
+    return { text: "The chalk is white underfoot. Sky above. Wind from the west.", fragmentIds: [] };
+  }
 
   const world     = queryWorld(terrain, gameState.position.x, gameState.position.y);
   const situation = buildSituation(world, gameState);
-  const matched   = matchFragments(fragments, situation, 4);
+  const matched   = matchFragments(fragments, situation, 4, gameState.recentFragmentIds);
   const apiKey    = loadApiKey();
+  const ids       = matched.map(m => m.fragment.id);
 
   if (matched.length === 0) {
-    return "The chalk is white underfoot. Sky above, wide and pale. Wind moves across the ridge.";
+    return { text: "The chalk is white underfoot. Sky above, wide and pale. Wind moves across the ridge.", fragmentIds: [] };
   }
   if (apiKey) {
     try {
-      return await generateVoice(apiKey, situation, matched, {
+      const text = await generateVoice(apiKey, situation, matched, {
         instruction:
           "Weave these fragments into a 3–6 sentence description of the landscape outside the barrow. " +
           "This is the first moment of the game — the player has just emerged into daylight. " +
           "Lead with the ground, then sky, then one sound. End on stillness or distance.",
         recentDescriptions: [],
       });
+      return { text, fragmentIds: ids };
     } catch {
-      return matched.map(m => m.fragment.text).join(" ");
+      return { text: matched.map(m => m.fragment.text).join(" "), fragmentIds: ids };
     }
   }
-  return matched.map(m => m.fragment.text).join(" ");
+  return { text: matched.map(m => m.fragment.text).join(" "), fragmentIds: ids };
 }
 
 async function playOpeningSequence(): Promise<void> {
@@ -318,8 +322,8 @@ async function playOpeningSequence(): Promise<void> {
   // ── Landscape description ─────────────────────────────────────
   await clearPage();
 
-  const description = await descriptionPromise;
-  const sentences   = splitSentences(description);
+  const { text: description, fragmentIds } = await descriptionPromise;
+  const sentences = splitSentences(description);
 
   for (const sentence of sentences) {
     appendText(sentence);
@@ -331,6 +335,7 @@ async function playOpeningSequence(): Promise<void> {
   const currContext = buildContext(world, gameState.weather.type, gameState.time.hour);
   gameState.prevContext          = currContext;
   gameState.recentDescriptions   = [description];
+  gameState.recentFragmentIds    = fragmentIds.slice(0, 15);
   updateStatus(world, gameState);
 
   // Initial map render (no time has passed yet, so timeCost = 0)
@@ -413,7 +418,7 @@ async function renderTurn(decisionMs: number): Promise<void> {
   if (behavior.shouldClear) await clearPage();
 
   const situation   = buildSituation(world, gameState);
-  const matched     = matchFragments(fragments, situation, fragCount);
+  const matched     = matchFragments(fragments, situation, fragCount, gameState.recentFragmentIds);
   const apiKey      = loadApiKey();
   const instruction = getModeInstruction(mode, gameState.tarryCount, transitionWhat);
 
@@ -451,6 +456,10 @@ async function renderTurn(decisionMs: number): Promise<void> {
 
   gameState.prevContext        = currContext;
   gameState.recentDescriptions = [description, ...gameState.recentDescriptions].slice(0, 3);
+  gameState.recentFragmentIds  = [
+    ...matched.map(m => m.fragment.id),
+    ...gameState.recentFragmentIds,
+  ].slice(0, 15);
 
   const choices = generateChoices(world);
   showChoices(choices, behavior.choicesDelayMs);
