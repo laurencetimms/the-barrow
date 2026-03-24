@@ -4,7 +4,7 @@ export type { TagCategory, TagValue, Situation } from "./tags";
 export { STARTER_FRAGMENTS } from "./fragments";
 export type { Fragment } from "./fragments";
 
-export { matchFragments } from "./matcher";
+export { matchFragments, countScoredFragments } from "./matcher";
 
 export { generateVoice, getSystemPrompt } from "./llm";
 

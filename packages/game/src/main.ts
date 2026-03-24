@@ -8,9 +8,11 @@ import {
   loadFragments,
   loadApiKey,
   matchFragments,
+  countScoredFragments,
   generateVoice,
 } from "@the-barrow/voice";
 import type { Fragment } from "@the-barrow/voice";
+import { updateDebugPanel } from "./debug-panel";
 import { createInitialState, advanceTime, getTimeTag, getSeasonTag, GameState } from "./state";
 import { queryWorld, WorldQuery } from "./world";
 import { buildSituation } from "./situation";
@@ -63,17 +65,20 @@ function getPageBehavior(mode: DescriptionMode, decisionMs: number): PageBehavio
 }
 
 // ─── Module state ────────────────────────────────────────────────
-let terrain:     TerrainMap | null = null;
-let gameState:   GameState  | null = null;
-let fragments:   Fragment[]        = [];
-let isGenerating                   = false;
-let choicesShownAt                 = 0;
-let turnNumber                     = 0; // player choices made post-opening
-let mapExpanded                    = false;
+let terrain:          TerrainMap | null = null;
+let gameState:        GameState  | null = null;
+let fragments:        Fragment[]        = [];
+let isGenerating                        = false;
+let choicesShownAt                      = 0;
+let turnNumber                          = 0; // player choices made post-opening
+let mapExpanded                         = false;
+let lastClearReason                     = "—";
+let weatherChangeTurn                   = 0;
 
 // ─── DOM ─────────────────────────────────────────────────────────
 const startScreen    = document.getElementById("start-screen")     as HTMLElement;
 const gameLayout     = document.getElementById("game-layout")      as HTMLElement;
+const debugPanel     = document.getElementById("debug-panel")      as HTMLElement;
 const statusBar      = document.getElementById("status")           as HTMLElement;
 const textPanel      = document.getElementById("text-panel")       as HTMLElement;
 const choicesPanel   = document.getElementById("choices")          as HTMLElement;
@@ -415,10 +420,14 @@ async function renderTurn(decisionMs: number): Promise<void> {
   const fragCount = FRAGMENT_COUNTS[mode];
 
   hideChoices();
-  if (behavior.shouldClear) await clearPage();
+  if (behavior.shouldClear) {
+    lastClearReason = `${mode} mode (turn ${gameState.turns})`;
+    await clearPage();
+  }
 
-  const situation   = buildSituation(world, gameState);
-  const matched     = matchFragments(fragments, situation, fragCount, gameState.recentFragmentIds);
+  const situation    = buildSituation(world, gameState);
+  const totalScored  = countScoredFragments(fragments, situation);
+  const matched      = matchFragments(fragments, situation, fragCount, gameState.recentFragmentIds);
   const apiKey      = loadApiKey();
   const instruction = getModeInstruction(mode, gameState.tarryCount, transitionWhat);
 
@@ -463,6 +472,29 @@ async function renderTurn(decisionMs: number): Promise<void> {
 
   const choices = generateChoices(world);
   showChoices(choices, behavior.choicesDelayMs);
+
+  updateDebugPanel(debugPanel, {
+    state: gameState,
+    world,
+    currContext,
+    prevContext: gameState.prevContext,
+    mode,
+    transitionWhat,
+    decisionMs,
+    voice: {
+      situation,
+      totalScored,
+      matched,
+      recentFragmentIds: gameState.recentFragmentIds,
+      instruction,
+    },
+    choices,
+    pageWordCount: pageWordCount(),
+    lastClearReason,
+    weatherChangeTurn,
+    mapWidth:  MAP_WIDTH,
+    mapHeight: MAP_HEIGHT,
+  });
 }
 
 function fallbackText(
@@ -507,7 +539,11 @@ function makeChoice(choice: Choice): void {
     const pool: GameState["weather"]["type"][] = [
       "clear", "clear", "clear", "rain", "drizzle", "fog", "wind", "haze",
     ];
-    gameState.weather.type = pool[Math.floor(Math.random() * pool.length)];
+    const newWeather = pool[Math.floor(Math.random() * pool.length)];
+    if (newWeather !== gameState.weather.type) {
+      gameState.weather.type = newWeather;
+      weatherChangeTurn = gameState.turns;
+    }
   }
 
   renderTurn(decisionMs).then(() => { isGenerating = false; });
@@ -519,6 +555,10 @@ document.addEventListener("keydown", (e: KeyboardEvent) => {
   if (e.key === "Escape") { closeMapOverlay(); return; }
   if (e.key === "m" || e.key === "M") {
     if (mapExpanded) closeMapOverlay(); else openMapOverlay();
+    return;
+  }
+  if (e.key === "d" || e.key === "D") {
+    debugPanel.classList.toggle("hidden");
     return;
   }
   const num = parseInt(e.key);

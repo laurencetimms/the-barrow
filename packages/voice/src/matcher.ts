@@ -74,6 +74,11 @@ function weightedSelect(
   return selected;
 }
 
+/** Count how many fragments score > 0 against a situation (for debug display). */
+export function countScoredFragments(fragments: Fragment[], situation: Situation): number {
+  return fragments.filter(f => scoreFragment(f, situation) > 0).length;
+}
+
 /**
  * Select the best-matching fragments for a situation.
  * @param excludeIds Fragment ids to exclude (recency filter — pass recent turn ids).
