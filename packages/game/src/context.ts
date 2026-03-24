@@ -20,7 +20,7 @@ export interface PerceptualContext {
   inCave: boolean;
 }
 
-export type DescriptionMode = "full" | "movement" | "tarry" | "transition" | "reorientation";
+export type DescriptionMode = "full" | "movement" | "tarry" | "transition" | "reorientation" | "travel";
 
 export interface ModeResult {
   mode: DescriptionMode;
@@ -175,5 +175,9 @@ export function getModeInstruction(
     case "reorientation":
       return "The player has been away. Write a 1-sentence compressed reminder of where they are " +
         "(geology, rough altitude, any landmark), then 2–3 sentences of scene description.";
+    case "travel":
+      return "Weave these fragments into a 3-4 sentence compressed travel narrative. " +
+        "Forward momentum. Ground passing underfoot. The landscape moving past. " +
+        "Do not describe an arrival. No invented incidents. Just walking.";
   }
 }

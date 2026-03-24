@@ -1,107 +1,237 @@
 /**
  * Generates movement choices from the world query.
- * Choices are phrased as natural impulses, not game commands.
+ * Directional choices initiate travel sequences (travel: true).
+ * Immediate choices (nearby features, wait) are single-turn (travel: false).
  */
 
-import type { WorldQuery, AdjacentCell } from "./world";
+import type { TerrainMap, TerrainCell } from "@the-barrow/terrain";
+import { GeologyType, GEOLOGY_INFO } from "@the-barrow/terrain";
+import type { WorldQuery } from "./world";
+import { getMaxDistance } from "./travel";
 
 export interface Choice {
-  id: string;
-  text: string;
-  /** The terrain cell movement this choice represents */
-  dx: number;
-  dy: number;
-  /** How long this movement takes (affects time advancement) */
+  id:       string;
+  text:     string;
+  dx:       number;
+  dy:       number;
   timeCost: number;
+  /** true = initiates a travel sequence; false = immediate single-cell action or wait */
+  travel:   boolean;
 }
 
-/** Direction descriptions that feel like thoughts, not compass points */
-const DIRECTION_PROSE: Record<string, string[]> = {
-  north: ["Continue north", "Head north"],
-  south: ["Turn south", "Head south"],
-  east: ["Turn east", "Head east"],
-  west: ["Turn west", "Head west"],
-  northeast: ["Bear northeast", "Head northeast"],
-  northwest: ["Bear northwest", "Head northwest"],
-  southeast: ["Bear southeast", "Head southeast"],
-  southwest: ["Bear southwest", "Head southwest"],
-};
+// ─── Direction constants ──────────────────────────────────────────
 
-export function generateChoices(world: WorldQuery): Choice[] {
+const DIRS = [
+  { dx:  0, dy: -1, name: "north"     },
+  { dx:  1, dy: -1, name: "northeast" },
+  { dx:  1, dy:  0, name: "east"      },
+  { dx:  1, dy:  1, name: "southeast" },
+  { dx:  0, dy:  1, name: "south"     },
+  { dx: -1, dy:  1, name: "southwest" },
+  { dx: -1, dy:  0, name: "west"      },
+  { dx: -1, dy: -1, name: "northwest" },
+] as const;
+
+const DIR_INDEX: Record<string, number> = {};
+DIRS.forEach((d, i) => { DIR_INDEX[d.name] = i; });
+
+function angularDiff(a: string, b: string): number {
+  const ai = DIR_INDEX[a] ?? 0;
+  const bi = DIR_INDEX[b] ?? 0;
+  const diff = Math.abs(ai - bi);
+  return Math.min(diff, 8 - diff);
+}
+
+// ─── Look-ahead ──────────────────────────────────────────────────
+
+interface LookAhead {
+  direction:        string;
+  dx:               number;
+  dy:               number;
+  blocked:          boolean; // first adjacent cell is impassable
+  hasRiverAdjacent: boolean; // first cell has river (immediate feature)
+  hasRiverAhead:    boolean;  // river within scan range (beyond first cell)
+  hasCoastAhead:    boolean;
+  geoChange:        boolean;
+  newGeoLabel:      string;
+  altTrend:         number;   // average altitude change per cell (signed)
+  score:            number;
+}
+
+function scanDirection(
+  terrain: TerrainMap,
+  x: number, y: number,
+  dx: number, dy: number,
+  startCell: TerrainCell,
+  _startGeoLabel: string,
+): LookAhead {
+  const scanDepth = getMaxDistance(startCell);
+  let blocked          = false;
+  let hasRiverAdjacent = false;
+  let hasRiverAhead    = false;
+  let hasCoastAhead    = false;
+  let geoChange        = false;
+  let newGeoLabel      = "";
+  let altSum           = 0;
+  let altCount         = 0;
+  let prevHadRiver     = startCell.riverFlow > 0;
+  const dirName = DIRS.find(d => d.dx === dx && d.dy === dy)?.name ?? "";
+
+  for (let step = 1; step <= scanDepth; step++) {
+    const nx = x + dx * step;
+    const ny = y + dy * step;
+    if (nx < 0 || nx >= terrain.width || ny < 0 || ny >= terrain.height) break;
+    const cell = terrain.cells[ny][nx];
+
+    if (cell.geology === GeologyType.Water || cell.geology === GeologyType.Ice) {
+      if (step === 1) blocked = true;
+      break;
+    }
+
+    if (step === 1 && cell.riverFlow > 0) hasRiverAdjacent = true;
+    if (step > 1  && cell.riverFlow > 0 && !prevHadRiver) hasRiverAhead = true;
+    if (cell.isCoast && !startCell.isCoast) hasCoastAhead = true;
+
+    if (cell.geology !== startCell.geology && !geoChange) {
+      geoChange = true;
+      newGeoLabel = GEOLOGY_INFO[cell.geology]?.label ?? cell.geology;
+    }
+
+    altSum += cell.altitude - startCell.altitude;
+    altCount++;
+    prevHadRiver = cell.riverFlow > 0;
+  }
+
+  const altTrend = altCount > 0 ? altSum / altCount : 0;
+
+  // Score: higher = more interesting direction
+  let score = 0;
+  if (hasRiverAdjacent) score += 3;
+  if (hasRiverAhead)    score += 2;
+  if (hasCoastAhead)    score += 2;
+  if (geoChange)        score += 3;
+  if (Math.abs(altTrend) > 0.05) score += 1;
+  // Prefer cardinal directions slightly over diagonals for readability
+  if (["north","east","south","west"].includes(dirName)) score += 0.5;
+
+  return { direction: dirName, dx, dy, blocked, hasRiverAdjacent, hasRiverAhead,
+           hasCoastAhead, geoChange, newGeoLabel, altTrend, score };
+}
+
+// ─── Choice text ─────────────────────────────────────────────────
+
+function geoTravelSuffix(cell: TerrainCell): string {
+  switch (cell.geology) {
+    case GeologyType.Chalk:     return "across the downland";
+    case GeologyType.Limestone: return "across the limestone";
+    case GeologyType.Sandstone: return "across the heath";
+    case GeologyType.Granite:   return "across the moor";
+    case GeologyType.Glacial:   return "across the open ground";
+    case GeologyType.Slate:     return "along the valley";
+    default:                    return "";
+  }
+}
+
+function travelChoiceText(startCell: TerrainCell, look: LookAhead): string {
+  const dir = look.direction;
+
+  if (look.hasCoastAhead)  return `Head ${dir} toward the coast`;
+
+  if (look.geoChange) {
+    const geo = look.newGeoLabel.toLowerCase();
+    if (look.altTrend > 0.04)  return `Climb ${dir} into the ${geo}`;
+    if (look.altTrend < -0.04) return `Descend ${dir} into the ${geo}`;
+    return `Head ${dir} into the ${geo}`;
+  }
+
+  if (look.hasRiverAhead) return `Head ${dir} toward the river`;
+
+  // Same geology, no special features — describe mode of travel
+  if (startCell.geology === GeologyType.Clay)  return `Push ${dir} through the trees`;
+  if (startCell.geology === GeologyType.Slate) return `Follow the valley ${dir}`;
+
+  if (look.altTrend > 0.04)  return `Climb ${dir} toward higher ground`;
+  if (look.altTrend < -0.04) return `Descend ${dir} toward the lower ground`;
+
+  const suffix = geoTravelSuffix(startCell);
+  return suffix ? `Continue ${dir} ${suffix}` : `Continue ${dir}`;
+}
+
+// ─── Main export ─────────────────────────────────────────────────
+
+export function generateChoices(
+  world:   WorldQuery,
+  terrain: TerrainMap,
+  x:       number,
+  y:       number,
+): Choice[] {
   const choices: Choice[] = [];
+  const startCell = terrain.cells[y][x];
 
-  // Sort adjacent terrain by movement cost — easiest first
-  const sorted = [...world.adjacentTerrain].sort((a, b) => a.movementCost - b.movementCost);
-
-  // Generate contextual movement choices
-  for (const adj of sorted) {
-    const phrases = DIRECTION_PROSE[adj.direction] ?? [`Go ${adj.direction}`];
-    let text = phrases[0];
-
-    // Add terrain context
-    if (adj.altChange > 0.03) {
-      text = `Climb ${adj.direction} toward higher ground`;
-    } else if (adj.altChange < -0.03) {
-      text = `Descend ${adj.direction} into the lower ground`;
-    }
-
-    if (adj.hasRiver) {
-      text = `Head ${adj.direction} toward the river`;
-    }
-
-    if (adj.hasPath) {
-      text = `Follow the path ${adj.direction}`;
-    }
-
-    // Geology transitions
-    if (adj.geoLabel !== world.geoInfo.label) {
-      const geoLower = adj.geoLabel.toLowerCase();
-      if (adj.altChange > 0.02) {
-        text = `Climb ${adj.direction} into the ${geoLower}`;
-      } else if (adj.altChange < -0.02) {
-        text = `Descend ${adj.direction} into the ${geoLower}`;
-      } else {
-        text = `Continue ${adj.direction} into the ${geoLower}`;
-      }
-    }
-
+  // ── Immediate choices for adjacent rivers ─────────────────────
+  // (settlements/sacred sites will be added when habitation layer is integrated)
+  const riverAdj = world.adjacentTerrain.filter(a => a.hasRiver && a.cell.geology !== GeologyType.Water);
+  for (const adj of riverAdj.slice(0, 1)) {
     choices.push({
-      id: `move-${adj.direction}`,
-      text,
-      dx: adj.dx,
-      dy: adj.dy,
-      timeCost: Math.round(adj.movementCost),
+      id:       `cross-river-${adj.direction}`,
+      text:     `Cross to the river ${adj.direction}`,
+      dx:       adj.dx,
+      dy:       adj.dy,
+      timeCost: 1,
+      travel:   false,
     });
   }
 
-  // Always offer "wait" — the tarrying mechanic
-  choices.push({
-    id: "wait",
-    text: "Stay here. Watch. Listen.",
-    dx: 0,
-    dy: 0,
-    timeCost: 1,
-  });
+  // ── Directional travel choices ─────────────────────────────────
+  const looks: LookAhead[] = DIRS.map(d =>
+    scanDirection(terrain, x, y, d.dx, d.dy, startCell, world.geoInfo.label)
+  );
 
-  // Limit to 5-6 choices max — pick the most interesting
-  if (choices.length > 6) {
-    // Keep wait, keep the most contextual (river, path, geology transition),
-    // then fill with directional variety
-    const wait = choices.find(c => c.id === "wait")!;
-    const special = choices.filter(c =>
-      c.id !== "wait" && (
-        c.text.includes("river") ||
-        c.text.includes("path") ||
-        c.text.includes("into the")
-      )
-    ).slice(0, 3);
+  // Filter out blocked and river-adjacent (already handled as immediate above)
+  const travelCandidates = looks.filter(l => !l.blocked && !l.hasRiverAdjacent);
 
-    const remaining = choices.filter(c =>
-      c.id !== "wait" && !special.includes(c)
-    ).slice(0, 2);
+  // Sort by score descending
+  travelCandidates.sort((a, b) => b.score - a.score);
 
-    return [...special, ...remaining, wait];
+  // Greedily select up to 4 with at least 90° (2 index steps) between them
+  const selectedDirs: LookAhead[] = [];
+  for (const look of travelCandidates) {
+    if (selectedDirs.every(s => angularDiff(s.direction, look.direction) >= 2)) {
+      selectedDirs.push(look);
+      if (selectedDirs.length >= 4) break;
+    }
   }
+
+  // If we got fewer than 2 directional choices, relax the constraint and try again
+  if (selectedDirs.length < 2) {
+    for (const look of travelCandidates) {
+      if (!selectedDirs.includes(look)) {
+        selectedDirs.push(look);
+        if (selectedDirs.length >= 3) break;
+      }
+    }
+  }
+
+  for (const look of selectedDirs) {
+    choices.push({
+      id:       `travel-${look.direction}`,
+      text:     travelChoiceText(startCell, look),
+      dx:       look.dx,
+      dy:       look.dy,
+      timeCost: 1, // placeholder — actual cost determined by travel sequence
+      travel:   true,
+    });
+  }
+
+  // ── Wait — always last ─────────────────────────────────────────
+  choices.push({
+    id:       "wait",
+    text:     "Stay here. Watch. Listen.",
+    dx:       0,
+    dy:       0,
+    timeCost: 1,
+    travel:   false,
+  });
 
   return choices;
 }

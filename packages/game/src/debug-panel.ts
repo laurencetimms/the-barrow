@@ -32,6 +32,14 @@ export interface DebugInfo {
   weatherChangeTurn: number;
   mapWidth: number;
   mapHeight: number;
+  lastTravel?: {
+    bearingName:   string;
+    startGeoLabel: string;
+    cellsCovered:  number;
+    stopReason:    string;
+    notables:      string[];
+    arrivalMode:   string | null;
+  } | null;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────
@@ -223,6 +231,20 @@ function nearbySection(info: DebugInfo): string | null {
   return section("Nearby", lines.join("\n"));
 }
 
+function lastTravelSection(info: DebugInfo): string | null {
+  const t = info.lastTravel;
+  if (!t) return null;
+  const lines = [
+    `Bearing:    ${t.bearingName}`,
+    `Distance:   ${t.cellsCovered} cell${t.cellsCovered === 1 ? "" : "s"}`,
+    `Stop:       ${t.stopReason}`,
+    `Notables:   ${t.notables.length > 0 ? t.notables.join(", ") : "none"}`,
+    `Geo start:  ${t.startGeoLabel}`,
+    `Arrival:    ${t.arrivalMode ?? "none (travel narrative only)"}`,
+  ];
+  return section("Last Travel", lines.join("\n"));
+}
+
 // ─── Main export ─────────────────────────────────────────────────
 
 export function updateDebugPanel(el: HTMLElement, info: DebugInfo): void {
@@ -239,6 +261,9 @@ export function updateDebugPanel(el: HTMLElement, info: DebugInfo): void {
 
   const nearby = nearbySection(info);
   if (nearby) parts.push(nearby);
+
+  const travel = lastTravelSection(info);
+  if (travel) parts.push(travel);
 
   el.innerHTML = parts.join("");
 }

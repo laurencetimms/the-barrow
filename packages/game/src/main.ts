@@ -18,6 +18,8 @@ import { queryWorld, WorldQuery } from "./world";
 import { buildSituation } from "./situation";
 import { generateChoices, Choice } from "./choices";
 import { buildContext, selectMode, getModeInstruction, DescriptionMode } from "./context";
+import { executeTravelSequence } from "./travel";
+import type { TravelResult, TravelStopReason } from "./travel";
 import { computeVisibilityRadius, updateVisitedGrid, renderMemoryMap } from "./memory-map";
 
 // ─── Config ──────────────────────────────────────────────────────
@@ -27,7 +29,7 @@ const DEFAULT_SEED   = "barrow";
 const PAGE_WORD_LIMIT = 350;
 
 const FRAGMENT_COUNTS: Record<DescriptionMode, number> = {
-  full: 4, reorientation: 3, movement: 2, transition: 2, tarry: 1,
+  full: 4, reorientation: 3, movement: 2, transition: 2, tarry: 1, travel: 3,
 };
 
 // ─── Opening sequence text ───────────────────────────────────────
@@ -61,6 +63,8 @@ function getPageBehavior(mode: DescriptionMode, decisionMs: number): PageBehavio
     case "tarry":
       if (decisionMs < 10_000) return { shouldClear: false, appendMarginPx: 16, choicesDelayMs: 1000 };
       return                         { shouldClear: true,  appendMarginPx: 0,  choicesDelayMs: 1500 };
+    case "travel":
+      return { shouldClear: false, appendMarginPx: 20, choicesDelayMs: 2500 };
   }
 }
 
@@ -74,6 +78,7 @@ let turnNumber                          = 0; // player choices made post-opening
 let mapExpanded                         = false;
 let lastClearReason                     = "—";
 let weatherChangeTurn                   = 0;
+let lastTravel: (TravelResult & { bearingName: string; startGeoLabel: string; arrivalMode: DescriptionMode | null }) | null = null;
 
 // ─── DOM ─────────────────────────────────────────────────────────
 const startScreen    = document.getElementById("start-screen")     as HTMLElement;
@@ -248,6 +253,37 @@ mapOverlay.addEventListener("click", (e) => {
   if (e.target === mapOverlay) closeMapOverlay();
 });
 
+// ─── Travel helpers ──────────────────────────────────────────────
+
+function bearingToName(dx: number, dy: number): string {
+  if (dx ===  0 && dy === -1) return "north";
+  if (dx ===  1 && dy === -1) return "northeast";
+  if (dx ===  1 && dy ===  0) return "east";
+  if (dx ===  1 && dy ===  1) return "southeast";
+  if (dx ===  0 && dy ===  1) return "south";
+  if (dx === -1 && dy ===  1) return "southwest";
+  if (dx === -1 && dy ===  0) return "west";
+  if (dx === -1 && dy === -1) return "northwest";
+  return "forward";
+}
+
+function stopReasonToArrivalMode(reason: TravelStopReason): DescriptionMode | null {
+  switch (reason) {
+    case "max-distance":         return null;
+    case "geology-change":       return "full";
+    case "altitude-change":      return "full";
+    case "river-crossing":       return "full";
+    case "coast-reached":        return "full";
+    case "ice-reached":          return "full";
+    case "settlement-visible":   return "full";
+    case "sacred-site-visible":  return "full";
+    case "path-junction":        return "transition";
+    case "weather-change":       return "transition";
+    case "time-threshold":       return "transition";
+    case "impassable":           return "movement";
+  }
+}
+
 // ─── Opening sequence ─────────────────────────────────────────────
 
 /** Split prose into individual sentences for timed reveal. */
@@ -347,7 +383,7 @@ async function playOpeningSequence(): Promise<void> {
   drawMap(0);
 
   // ── First choices — 5s pause (section 11) ────────────────────
-  const choices = generateChoices(world);
+  const choices = generateChoices(world, terrain, gameState.position.x, gameState.position.y);
   showChoices(choices, 5000); // Math.max(5000, 4000) = 5000 since turnNumber = 0 < 4
 
   // Reveal status bar and map as choices fade in
@@ -403,6 +439,157 @@ startBtn.addEventListener("click", async () => {
 });
 
 // ─── Turn rendering ───────────────────────────────────────────────
+
+async function renderTravelTurn(
+  result:     TravelResult,
+  startX:     number,
+  startY:     number,
+  dx:         number,
+  dy:         number,
+  decisionMs: number,
+): Promise<void> {
+  if (!terrain || !gameState) return;
+
+  // No cells covered → treat as a normal turn at current position
+  if (result.cellsCovered === 0) {
+    await renderTurn(decisionMs);
+    return;
+  }
+
+  hideChoices();
+
+  const startWorld    = queryWorld(terrain, startX, startY);
+  const bearingName   = bearingToName(dx, dy);
+  const startGeoLabel = startWorld.geoInfo.label;
+
+  // Build travel situation: starting geology + movement state tag
+  const travelSituation = buildSituation(startWorld, gameState);
+  (travelSituation as unknown as Record<string, string[]>).state = [
+    ...((travelSituation as unknown as Record<string, string[]>).state ?? []),
+    "movement",
+  ];
+
+  const travelMatched   = matchFragments(fragments, travelSituation, FRAGMENT_COUNTS["travel"], gameState.recentFragmentIds);
+  const notableStr      = result.notables.join(", ");
+  const apiKey          = loadApiKey();
+
+  const travelInstruction = [
+    `The player walked ${bearingName} through ${startGeoLabel} terrain, covering ${result.cellsCovered} cell${result.cellsCovered === 1 ? "" : "s"}.`,
+    notableStr ? `Passing notables: ${notableStr}.` : "",
+    "Weave the fragments into a 3-4 sentence compressed travel narrative.",
+    "Convey forward momentum — ground passing underfoot, the landscape moving past.",
+    "Do not describe a destination or arrival. No invented incidents. Just walking.",
+  ].filter(Boolean).join(" ");
+
+  let travelDescription = "";
+  let travelLoadingP: HTMLParagraphElement | null = null;
+  if (apiKey && travelMatched.length > 0) {
+    travelLoadingP = appendText("The land speaks\u2026", "generating", 20);
+  }
+  if (travelMatched.length > 0) {
+    if (apiKey) {
+      try {
+        travelDescription = await generateVoice(apiKey, travelSituation, travelMatched, {
+          instruction: travelInstruction,
+          recentDescriptions: gameState.recentDescriptions,
+        });
+      } catch {
+        travelDescription = fallbackText(travelMatched, "travel");
+      }
+    } else {
+      travelDescription = fallbackText(travelMatched, "travel");
+    }
+  } else {
+    travelDescription = "The ground passes underfoot. The landscape shifts around you.";
+  }
+  travelLoadingP?.remove();
+  await enforcePageCapacity(travelDescription);
+  appendText(travelDescription, undefined, 20);
+
+  gameState.recentDescriptions = [travelDescription, ...gameState.recentDescriptions].slice(0, 3);
+  gameState.recentFragmentIds  = [...travelMatched.map(m => m.fragment.id), ...gameState.recentFragmentIds].slice(0, 15);
+
+  const arrivalMode = stopReasonToArrivalMode(result.stopReason);
+
+  // Track for debug
+  lastTravel = { ...result, bearingName, startGeoLabel, arrivalMode };
+
+  // Current position is already updated — query the arrival world
+  const world = queryWorld(terrain, gameState.position.x, gameState.position.y);
+  updateStatus(world, gameState);
+  const currContext = buildContext(world, gameState.weather.type, gameState.time.hour);
+
+  if (arrivalMode === null) {
+    // Max-distance — just the travel narrative, then choices
+    gameState.prevContext = currContext;
+    const choices = generateChoices(world, terrain, gameState.position.x, gameState.position.y);
+    showChoices(choices, 2500);
+
+    updateDebugPanel(debugPanel, {
+      state: gameState, world, currContext, prevContext: gameState.prevContext,
+      mode: "travel", decisionMs,
+      voice: { situation: travelSituation, totalScored: countScoredFragments(fragments, travelSituation), matched: travelMatched, recentFragmentIds: gameState.recentFragmentIds, instruction: travelInstruction },
+      choices, pageWordCount: pageWordCount(), lastClearReason, weatherChangeTurn,
+      mapWidth: MAP_WIDTH, mapHeight: MAP_HEIGHT, lastTravel,
+    });
+    return;
+  }
+
+  // Interrupt: pause, clear if needed, then arrival description
+  await wait(1500);
+  if (arrivalMode === "full") {
+    lastClearReason = `${result.stopReason} after travel (turn ${gameState.turns})`;
+    await clearPage();
+  }
+
+  const arrivalSituation   = buildSituation(world, gameState);
+  const totalScored        = countScoredFragments(fragments, arrivalSituation);
+  const arrivalMatched     = matchFragments(fragments, arrivalSituation, FRAGMENT_COUNTS[arrivalMode], gameState.recentFragmentIds);
+  const arrivalInstruction = getModeInstruction(arrivalMode, gameState.tarryCount);
+
+  let arrivalLoadingP: HTMLParagraphElement | null = null;
+  if (apiKey && arrivalMatched.length > 0) {
+    arrivalLoadingP = appendText("The land speaks\u2026", "generating", arrivalMode === "full" ? undefined : 20);
+  }
+
+  let arrivalDescription = "";
+  if (arrivalMatched.length > 0) {
+    if (apiKey) {
+      try {
+        arrivalDescription = await generateVoice(apiKey, arrivalSituation, arrivalMatched, {
+          instruction: arrivalInstruction,
+          recentDescriptions: gameState.recentDescriptions,
+        });
+      } catch {
+        arrivalDescription = fallbackText(arrivalMatched, arrivalMode);
+      }
+    } else {
+      arrivalDescription = fallbackText(arrivalMatched, arrivalMode);
+    }
+  } else {
+    arrivalDescription = fallbackText([], arrivalMode);
+  }
+
+  arrivalLoadingP?.remove();
+  if (arrivalMode !== "full") await enforcePageCapacity(arrivalDescription);
+  appendText(arrivalDescription, undefined, arrivalMode === "full" ? undefined : 20);
+
+  gameState.prevContext         = currContext;
+  gameState.recentDescriptions  = [arrivalDescription, ...gameState.recentDescriptions].slice(0, 3);
+  gameState.recentFragmentIds   = [...arrivalMatched.map(m => m.fragment.id), ...gameState.recentFragmentIds].slice(0, 15);
+
+  const arrivalBehavior = getPageBehavior(arrivalMode, decisionMs);
+  const choices         = generateChoices(world, terrain, gameState.position.x, gameState.position.y);
+  showChoices(choices, arrivalBehavior.choicesDelayMs);
+
+  updateDebugPanel(debugPanel, {
+    state: gameState, world, currContext, prevContext: gameState.prevContext,
+    mode: arrivalMode, decisionMs,
+    voice: { situation: arrivalSituation, totalScored, matched: arrivalMatched, recentFragmentIds: gameState.recentFragmentIds, instruction: arrivalInstruction },
+    choices, pageWordCount: pageWordCount(), lastClearReason, weatherChangeTurn,
+    mapWidth: MAP_WIDTH, mapHeight: MAP_HEIGHT, lastTravel,
+  });
+}
 
 async function renderTurn(decisionMs: number): Promise<void> {
   if (!terrain || !gameState) return;
@@ -470,7 +657,7 @@ async function renderTurn(decisionMs: number): Promise<void> {
     ...gameState.recentFragmentIds,
   ].slice(0, 15);
 
-  const choices = generateChoices(world);
+  const choices = generateChoices(world, terrain, gameState.position.x, gameState.position.y);
   showChoices(choices, behavior.choicesDelayMs);
 
   updateDebugPanel(debugPanel, {
@@ -494,6 +681,7 @@ async function renderTurn(decisionMs: number): Promise<void> {
     weatherChangeTurn,
     mapWidth:  MAP_WIDTH,
     mapHeight: MAP_HEIGHT,
+    lastTravel,
   });
 }
 
@@ -505,9 +693,10 @@ function fallbackText(
     if (mode === "movement")   return "The path continues.";
     if (mode === "tarry")      return "Stillness.";
     if (mode === "transition") return "Something has changed.";
+    if (mode === "travel")     return "The ground passes underfoot. The landscape shifts around you.";
     return "You stand in the landscape. The wind moves.";
   }
-  if (mode === "full" || mode === "reorientation") {
+  if (mode === "full" || mode === "reorientation" || mode === "travel") {
     return matched.map(m => m.fragment.text).join(" ");
   }
   return matched[0].fragment.text;
@@ -516,11 +705,13 @@ function fallbackText(
 // ─── Make a choice ────────────────────────────────────────────────
 
 function makeChoice(choice: Choice): void {
-  if (!gameState || isGenerating) return;
+  if (!gameState || !terrain || isGenerating) return;
   isGenerating = true;
   turnNumber++;
 
   const decisionMs = Date.now() - choicesShownAt;
+  const startX = gameState.position.x;
+  const startY = gameState.position.y;
 
   if (choice.dx === 0 && choice.dy === 0) {
     gameState.tarryCount++;
@@ -528,25 +719,52 @@ function makeChoice(choice: Choice): void {
     gameState.tarryCount = 0;
   }
 
-  gameState.position.x = Math.max(0, Math.min(MAP_WIDTH  - 1, gameState.position.x + choice.dx));
-  gameState.position.y = Math.max(0, Math.min(MAP_HEIGHT - 1, gameState.position.y + choice.dy));
+  if (choice.travel && terrain) {
+    // Travel sequence: multi-cell move
+    const startContext = buildContext(queryWorld(terrain, startX, startY), gameState.weather.type, gameState.time.hour);
+    const result = executeTravelSequence(terrain, startX, startY, choice.dx, choice.dy, startContext, gameState);
 
-  for (let i = 0; i < choice.timeCost; i++) advanceTime(gameState);
+    // Update position to destination
+    gameState.position.x = result.destination.x;
+    gameState.position.y = result.destination.y;
 
-  drawMap(choice.timeCost);
+    // Advance time by cells covered (minimum 1)
+    const steps = Math.max(1, result.cellsCovered);
+    for (let i = 0; i < steps; i++) advanceTime(gameState);
 
-  if (Math.random() < 0.15) {
-    const pool: GameState["weather"]["type"][] = [
-      "clear", "clear", "clear", "rain", "drizzle", "fog", "wind", "haze",
-    ];
-    const newWeather = pool[Math.floor(Math.random() * pool.length)];
-    if (newWeather !== gameState.weather.type) {
-      gameState.weather.type = newWeather;
-      weatherChangeTurn = gameState.turns;
+    // Weather change chance (same as before)
+    if (Math.random() < 0.15) {
+      const pool: GameState["weather"]["type"][] = ["clear","clear","clear","rain","drizzle","fog","wind","haze"];
+      const newWeather = pool[Math.floor(Math.random() * pool.length)];
+      if (newWeather !== gameState.weather.type) {
+        gameState.weather.type = newWeather;
+        weatherChangeTurn = gameState.turns;
+      }
     }
-  }
 
-  renderTurn(decisionMs).then(() => { isGenerating = false; });
+    drawMap(steps);
+    renderTravelTurn(result, startX, startY, choice.dx, choice.dy, decisionMs)
+      .then(() => { isGenerating = false; });
+
+  } else {
+    // Immediate action: single-cell move (or wait)
+    gameState.position.x = Math.max(0, Math.min(MAP_WIDTH  - 1, startX + choice.dx));
+    gameState.position.y = Math.max(0, Math.min(MAP_HEIGHT - 1, startY + choice.dy));
+
+    for (let i = 0; i < choice.timeCost; i++) advanceTime(gameState);
+
+    if (Math.random() < 0.15) {
+      const pool: GameState["weather"]["type"][] = ["clear","clear","clear","rain","drizzle","fog","wind","haze"];
+      const newWeather = pool[Math.floor(Math.random() * pool.length)];
+      if (newWeather !== gameState.weather.type) {
+        gameState.weather.type = newWeather;
+        weatherChangeTurn = gameState.turns;
+      }
+    }
+
+    drawMap(choice.timeCost);
+    renderTurn(decisionMs).then(() => { isGenerating = false; });
+  }
 }
 
 // ─── Keyboard shortcuts ───────────────────────────────────────────
