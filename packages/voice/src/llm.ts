@@ -35,10 +35,18 @@ function describeSituation(situation: Situation): string {
   return parts.join(". ") + ".";
 }
 
+export interface VoiceOptions {
+  /** Custom instruction replacing the default "Weave these fragments..." line. */
+  instruction?: string;
+  /** Recent descriptions for the LLM to avoid repeating. */
+  recentDescriptions?: string[];
+}
+
 export async function generateVoice(
   apiKey: string,
   situation: Situation,
-  fragments: { fragment: Fragment; score: number }[]
+  fragments: { fragment: Fragment; score: number }[],
+  options?: VoiceOptions,
 ): Promise<string> {
   const sitDesc = describeSituation(situation);
 
@@ -46,12 +54,19 @@ export async function generateVoice(
     .map((f, i) => `Fragment ${i + 1}: "${f.fragment.text}"`)
     .join("\n");
 
+  const instruction = options?.instruction ??
+    "Weave these fragments into a short, flowing description. Follow the voice rules exactly. 3-6 sentences total.";
+
+  const recentSection = options?.recentDescriptions?.length
+    ? `\nRECENT DESCRIPTIONS — do not repeat details already mentioned:\n${options.recentDescriptions.join("\n\n")}\n`
+    : "";
+
   const userPrompt = `SITUATION: ${sitDesc}
 
 MATCHING FRAGMENTS:
 ${fragTexts}
-
-Weave these fragments into a short, flowing description. Follow the voice rules exactly. 3-6 sentences total.`;
+${recentSection}
+${instruction}`;
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",

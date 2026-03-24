@@ -3,6 +3,8 @@
  * Persists between sessions. Grows as more systems are added.
  */
 
+import type { PerceptualContext } from "./context";
+
 export interface Position {
   /** Coarse grid x (0 = west edge, MAP_WIDTH = east edge) */
   x: number;
@@ -36,6 +38,12 @@ export interface GameState {
   weather: Weather;
   /** Turns elapsed */
   turns: number;
+  /** Consecutive tarry actions (resets to 0 on any movement) */
+  tarryCount: number;
+  /** Perceptual context from the previous turn, for mode selection */
+  prevContext: PerceptualContext | null;
+  /** Last 3 generated description texts, for the LLM "do not repeat" context */
+  recentDescriptions: string[];
 }
 
 export function createInitialState(seed: string, startX: number, startY: number): GameState {
@@ -45,6 +53,9 @@ export function createInitialState(seed: string, startX: number, startY: number)
     time: { hour: 6, day: 0, season: 1, year: 0 }, // dawn, early summer
     weather: { type: "clear" },
     turns: 0,
+    tarryCount: 0,
+    prevContext: null,
+    recentDescriptions: [],
   };
 }
 
