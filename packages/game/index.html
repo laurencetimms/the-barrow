@@ -102,7 +102,7 @@
       overflow: hidden;
     }
 
-    /* Status line — top of text panel */
+    /* Status line — top of text panel; starts invisible (JS reveals after opening) */
     #status {
       flex-shrink: 0;
       padding: 10px 48px;
@@ -112,6 +112,7 @@
       font-size: 11px;
       color: #5a5248;
       letter-spacing: 0.04em;
+      opacity: 0;
     }
 
     /* Scrollable prose area */
@@ -174,7 +175,7 @@
       color: #d4c4a0;
     }
 
-    /* Memory map placeholder — top-right corner */
+    /* Memory map placeholder — top-right corner; starts invisible (JS reveals after opening) */
     #map-placeholder {
       position: fixed;
       top: 16px;
@@ -184,6 +185,7 @@
       background: #0d0c0a;
       border: 1px solid #2e2a24;
       pointer-events: none;
+      opacity: 0;
     }
 
     /* Mobile */

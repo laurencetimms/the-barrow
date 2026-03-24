@@ -17,21 +17,29 @@ import { buildSituation } from "./situation";
 import { generateChoices, Choice } from "./choices";
 import { buildContext, selectMode, getModeInstruction, DescriptionMode } from "./context";
 
-// ─── Config ─────────────────────────────────────────────────────
+// ─── Config ──────────────────────────────────────────────────────
 const MAP_WIDTH  = 300;
 const MAP_HEIGHT = 500;
-const DEFAULT_SEED = "barrow";
+const DEFAULT_SEED   = "barrow";
 const PAGE_WORD_LIMIT = 350;
 
-// Fragment counts by mode
 const FRAGMENT_COUNTS: Record<DescriptionMode, number> = {
   full: 4, reorientation: 3, movement: 2, transition: 2, tarry: 1,
 };
 
+// ─── Opening sequence text ───────────────────────────────────────
+const BARROW_LINES = [
+  "Dark.",
+  "Stone above you, close. The smell of earth.",
+  "Your hands find the wall. Rough. Cold.",
+  "Ahead — not dark. Grey. A different dark.",
+  "You move toward it.",
+] as const;
+
 // ─── Page behaviour by mode × decision timing ────────────────────
 interface PageBehavior {
-  shouldClear: boolean;
-  appendMarginPx: number; // 0 = use CSS default when shouldClear
+  shouldClear:    boolean;
+  appendMarginPx: number;
   choicesDelayMs: number;
 }
 
@@ -48,29 +56,28 @@ function getPageBehavior(mode: DescriptionMode, decisionMs: number): PageBehavio
       if (decisionMs < 30_000) return { shouldClear: false, appendMarginPx: 16, choicesDelayMs: 1500 };
       return                         { shouldClear: false, appendMarginPx: 28, choicesDelayMs: 2000 };
     case "tarry":
-      // Rapid accumulation: keep appending. Slower: clear to signal mode shift.
       if (decisionMs < 10_000) return { shouldClear: false, appendMarginPx: 16, choicesDelayMs: 1000 };
       return                         { shouldClear: true,  appendMarginPx: 0,  choicesDelayMs: 1500 };
   }
 }
 
-// ─── State ──────────────────────────────────────────────────────
+// ─── Module state ────────────────────────────────────────────────
 let terrain:     TerrainMap | null = null;
 let gameState:   GameState  | null = null;
 let fragments:   Fragment[]        = [];
 let isGenerating                   = false;
+let choicesShownAt                 = 0;
+let turnNumber                     = 0; // player choices made post-opening
 
-// When choices were last shown — used to compute decisionTime and detect absence
-let choicesShownAt = Date.now();
-
-// ─── DOM ────────────────────────────────────────────────────────
-const startScreen  = document.getElementById("start-screen")  as HTMLElement;
-const gameLayout   = document.getElementById("game-layout")   as HTMLElement;
-const statusBar    = document.getElementById("status")        as HTMLElement;
-const textPanel    = document.getElementById("text-panel")    as HTMLElement;
-const choicesPanel = document.getElementById("choices")       as HTMLElement;
-const seedInput    = document.getElementById("seed")          as HTMLInputElement;
-const startBtn     = document.getElementById("start-btn")     as HTMLButtonElement;
+// ─── DOM ─────────────────────────────────────────────────────────
+const startScreen    = document.getElementById("start-screen")    as HTMLElement;
+const gameLayout     = document.getElementById("game-layout")     as HTMLElement;
+const statusBar      = document.getElementById("status")          as HTMLElement;
+const textPanel      = document.getElementById("text-panel")      as HTMLElement;
+const choicesPanel   = document.getElementById("choices")         as HTMLElement;
+const mapPlaceholder = document.getElementById("map-placeholder") as HTMLElement;
+const seedInput      = document.getElementById("seed")            as HTMLInputElement;
+const startBtn       = document.getElementById("start-btn")       as HTMLButtonElement;
 
 fragments = loadFragments();
 
@@ -85,7 +92,7 @@ async function clearPage(): Promise<void> {
   if (paras.length === 0) return;
   for (const p of paras) {
     p.style.transition = "opacity 0.6s";
-    p.style.opacity = "0";
+    p.style.opacity    = "0";
   }
   await wait(650);
   for (const p of paras) p.remove();
@@ -96,19 +103,18 @@ function countWords(text: string): number {
 }
 
 function pageWordCount(): number {
-  const paras = Array.from(textPanel.querySelectorAll("p:not(.generating)")) as HTMLElement[];
-  return paras.reduce((n, p) => n + countWords(p.textContent ?? ""), 0);
+  return Array.from(textPanel.querySelectorAll("p:not(.generating)") as NodeListOf<HTMLElement>)
+    .reduce((n, p) => n + countWords(p.textContent ?? ""), 0);
 }
 
-/** Fade out and remove oldest paragraphs until adding newText would fit within the limit. */
 async function enforcePageCapacity(newText: string): Promise<void> {
   const incoming = countWords(newText);
   while (pageWordCount() + incoming > PAGE_WORD_LIMIT) {
-    const paras = textPanel.querySelectorAll("p:not(.generating)");
-    if (paras.length <= 1) break; // never empty the page entirely
-    const oldest = paras[0] as HTMLElement;
+    const all = textPanel.querySelectorAll("p:not(.generating)");
+    if (all.length <= 1) break;
+    const oldest = all[0] as HTMLElement;
     oldest.style.transition = "opacity 0.4s";
-    oldest.style.opacity = "0";
+    oldest.style.opacity    = "0";
     await wait(420);
     oldest.remove();
   }
@@ -120,18 +126,15 @@ function appendText(
   marginTopPx?: number,
 ): HTMLParagraphElement {
   const p = document.createElement("p");
-  if (className)            p.className    = className;
+  if (className)             p.className    = className;
   if (marginTopPx !== undefined) p.style.marginTop = `${marginTopPx}px`;
   p.textContent  = text;
   p.style.opacity = "0";
   textPanel.appendChild(p);
-  // Trigger fade-in on the next paint cycle
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      p.style.transition = "opacity 0.5s";
-      p.style.opacity    = "1";
-    });
-  });
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    p.style.transition = "opacity 0.5s";
+    p.style.opacity    = "1";
+  }));
   setTimeout(() => p.scrollIntoView({ behavior: "smooth", block: "nearest" }), 50);
   return p;
 }
@@ -144,6 +147,9 @@ function hideChoices(): void {
 
 function showChoices(choices: Choice[], delayMs: number): void {
   choicesShownAt = Date.now();
+  // Turns 0-3 (opening + first 3 player choices): enforce a 4s floor
+  const effectiveDelay = turnNumber < 4 ? Math.max(delayMs, 4000) : delayMs;
+
   choicesPanel.innerHTML = "";
   for (const choice of choices) {
     const btn = document.createElement("button");
@@ -154,7 +160,7 @@ function showChoices(choices: Choice[], delayMs: number): void {
   setTimeout(() => {
     choicesPanel.style.transition = "opacity 0.5s";
     choicesPanel.style.opacity    = "1";
-  }, delayMs);
+  }, effectiveDelay);
 }
 
 // ─── Status bar ──────────────────────────────────────────────────
@@ -163,30 +169,123 @@ function updateStatus(world: WorldQuery, state: GameState): void {
   const phase = state.time.day < 10 ? "Early " : state.time.day < 20 ? "" : "Late ";
   const season = getSeasonTag(state.time.season);
   const seasonLabel = phase + season.charAt(0).toUpperCase() + season.slice(1);
-
   const time = getTimeTag(state.time.hour);
   const timeLabel = time.charAt(0).toUpperCase() + time.slice(1);
-
   const weatherLabels: Record<string, string> = {
     clear: "Clear", rain: "Rain", drizzle: "Drizzle",
     fog: "Fog", wind: "Wind", storm: "Storm",
     snow: "Snow", frost: "Frost", haze: "Haze",
   };
-
   statusBar.textContent =
     `${world.geoInfo.label} · ${world.altitudeMetres}m · ${seasonLabel} · ${timeLabel} · ${weatherLabels[state.weather.type] ?? state.weather.type}`;
 }
 
-// ─── Start game ──────────────────────────────────────────────────
+// ─── Opening sequence ─────────────────────────────────────────────
 
-startBtn.addEventListener("click", () => {
-  const seed = seedInput.value.trim() || DEFAULT_SEED;
-  startScreen.style.display = "none";
-  gameLayout.style.display  = "flex";
-  startGame(seed);
-});
+/** Split prose into individual sentences for timed reveal. */
+function splitSentences(text: string): string[] {
+  return (text.match(/[^.!?]*[.!?]+/g) ?? [text])
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+}
 
-function startGame(seed: string): void {
+/** Append an opening-sequence line with its own colour and a 0.3s fade. */
+function appendOpeningLine(text: string, color: string): void {
+  const p = document.createElement("p");
+  p.textContent   = text;
+  p.style.color   = color;
+  p.style.opacity = "0";
+  textPanel.appendChild(p);
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    p.style.transition = "opacity 0.3s";
+    p.style.opacity    = "1";
+  }));
+}
+
+/** Generate the opening landscape description via the normal voice pipeline. */
+async function generateOpeningDescription(): Promise<string> {
+  if (!terrain || !gameState) return "The chalk is white underfoot. Sky above. Wind from the west.";
+
+  const world     = queryWorld(terrain, gameState.position.x, gameState.position.y);
+  const situation = buildSituation(world, gameState);
+  const matched   = matchFragments(fragments, situation, 4);
+  const apiKey    = loadApiKey();
+
+  if (matched.length === 0) {
+    return "The chalk is white underfoot. Sky above, wide and pale. Wind moves across the ridge.";
+  }
+  if (apiKey) {
+    try {
+      return await generateVoice(apiKey, situation, matched, {
+        instruction:
+          "Weave these fragments into a 3–6 sentence description of the landscape outside the barrow. " +
+          "This is the first moment of the game — the player has just emerged into daylight. " +
+          "Lead with the ground, then sky, then one sound. End on stillness or distance.",
+        recentDescriptions: [],
+      });
+    } catch {
+      return matched.map(m => m.fragment.text).join(" ");
+    }
+  }
+  return matched.map(m => m.fragment.text).join(" ");
+}
+
+async function playOpeningSequence(): Promise<void> {
+  if (!terrain || !gameState) return;
+
+  // ── Barrow interior ──────────────────────────────────────────
+  await wait(2500);
+
+  for (let i = 0; i < BARROW_LINES.length; i++) {
+    appendOpeningLine(BARROW_LINES[i], "#8a8078");
+    await wait(i < BARROW_LINES.length - 1 ? 3000 : 4000);
+  }
+
+  // ── Light ────────────────────────────────────────────────────
+  appendOpeningLine("Light.", "#d4caba");
+
+  // Background brightens very slightly over 2s
+  document.body.style.transition       = "background-color 2s";
+  document.body.style.backgroundColor = "#1e1c19";
+
+  // Begin generating the landscape description while the player holds on "Light."
+  const descriptionPromise = generateOpeningDescription();
+  await wait(3000);
+
+  // ── Landscape description ─────────────────────────────────────
+  await clearPage();
+
+  const description = await descriptionPromise;
+  const sentences   = splitSentences(description);
+
+  for (const sentence of sentences) {
+    appendText(sentence);
+    await wait(2500);
+  }
+
+  // ── Update game state ─────────────────────────────────────────
+  const world = queryWorld(terrain, gameState.position.x, gameState.position.y);
+  const currContext = buildContext(world, gameState.weather.type, gameState.time.hour);
+  gameState.prevContext          = currContext;
+  gameState.recentDescriptions   = [description];
+  updateStatus(world, gameState);
+
+  // ── First choices — 5s pause (section 11) ────────────────────
+  const choices = generateChoices(world);
+  showChoices(choices, 5000); // Math.max(5000, 4000) = 5000 since turnNumber = 0 < 4
+
+  // Reveal status bar and map placeholder as choices fade in
+  setTimeout(() => {
+    statusBar.style.transition       = "opacity 1s";
+    statusBar.style.opacity          = "1";
+    mapPlaceholder.style.transition  = "opacity 1s";
+    mapPlaceholder.style.opacity     = "1";
+  }, 5000);
+}
+
+// ─── Game initialisation ─────────────────────────────────────────
+
+function initGame(seed: string): void {
   const noise = createSeededNoise(seed);
   terrain = generateTerrain(noise, MAP_WIDTH, MAP_HEIGHT, seed);
 
@@ -207,11 +306,28 @@ function startGame(seed: string): void {
   }
 
   gameState = createInitialState(seed, startX, startY);
-  choicesShownAt = Date.now();
-  renderTurn(0);   // first turn — no prior decision time
 }
 
-// ─── Turn rendering ──────────────────────────────────────────────
+startBtn.addEventListener("click", async () => {
+  const seed = seedInput.value.trim() || DEFAULT_SEED;
+
+  // Fade out the start screen
+  startScreen.style.transition = "opacity 0.5s";
+  startScreen.style.opacity    = "0";
+  await wait(500);
+  startScreen.style.display = "none";
+
+  // Reveal the game layout with status bar and map placeholder invisible
+  statusBar.style.opacity    = "0";
+  mapPlaceholder.style.opacity = "0";
+  gameLayout.style.display   = "flex";
+
+  initGame(seed);
+  await playOpeningSequence();
+  // Normal makeChoice → renderTurn loop takes over after this
+});
+
+// ─── Turn rendering ───────────────────────────────────────────────
 
 async function renderTurn(decisionMs: number): Promise<void> {
   if (!terrain || !gameState) return;
@@ -219,9 +335,8 @@ async function renderTurn(decisionMs: number): Promise<void> {
   const world = queryWorld(terrain, gameState.position.x, gameState.position.y);
   updateStatus(world, gameState);
 
-  // Context and mode selection
-  const currContext = buildContext(world, gameState.weather.type, gameState.time.hour);
-  const isTarrying  = gameState.tarryCount > 0;
+  const currContext          = buildContext(world, gameState.weather.type, gameState.time.hour);
+  const isTarrying           = gameState.tarryCount > 0;
   const { mode, transitionWhat } = selectMode(
     gameState.prevContext, currContext, choicesShownAt, isTarrying,
   );
@@ -229,19 +344,14 @@ async function renderTurn(decisionMs: number): Promise<void> {
   const behavior  = getPageBehavior(mode, decisionMs);
   const fragCount = FRAGMENT_COUNTS[mode];
 
-  // Prepare page
   hideChoices();
-  if (behavior.shouldClear) {
-    await clearPage();
-  }
+  if (behavior.shouldClear) await clearPage();
 
-  // Fragment matching and voice generation
   const situation   = buildSituation(world, gameState);
   const matched     = matchFragments(fragments, situation, fragCount);
   const apiKey      = loadApiKey();
   const instruction = getModeInstruction(mode, gameState.tarryCount, transitionWhat);
 
-  // Show loading indicator (append mode only — clear mode has no prior text context to lose)
   let loadingP: HTMLParagraphElement | null = null;
   if (apiKey && matched.length > 0) {
     loadingP = appendText(
@@ -269,23 +379,17 @@ async function renderTurn(decisionMs: number): Promise<void> {
     description = fallbackText([], mode);
   }
 
-  // Remove loading indicator, then enforce page capacity before appending
   loadingP?.remove();
-  if (!behavior.shouldClear) {
-    await enforcePageCapacity(description);
-  }
+  if (!behavior.shouldClear) await enforcePageCapacity(description);
 
   appendText(description, undefined, behavior.shouldClear ? undefined : behavior.appendMarginPx);
 
-  // Persist context updates
-  gameState.prevContext = currContext;
+  gameState.prevContext        = currContext;
   gameState.recentDescriptions = [description, ...gameState.recentDescriptions].slice(0, 3);
 
   const choices = generateChoices(world);
   showChoices(choices, behavior.choicesDelayMs);
 }
-
-// ─── Fallback text (no API key or no fragments) ───────────────────
 
 function fallbackText(
   matched: { fragment: { text: string }; score: number }[],
@@ -303,15 +407,15 @@ function fallbackText(
   return matched[0].fragment.text;
 }
 
-// ─── Make a choice ───────────────────────────────────────────────
+// ─── Make a choice ────────────────────────────────────────────────
 
 function makeChoice(choice: Choice): void {
   if (!gameState || isGenerating) return;
   isGenerating = true;
+  turnNumber++;
 
   const decisionMs = Date.now() - choicesShownAt;
 
-  // Maintain tarry counter
   if (choice.dx === 0 && choice.dy === 0) {
     gameState.tarryCount++;
   } else {
@@ -323,7 +427,6 @@ function makeChoice(choice: Choice): void {
 
   for (let i = 0; i < choice.timeCost; i++) advanceTime(gameState);
 
-  // Placeholder weather drift
   if (Math.random() < 0.15) {
     const pool: GameState["weather"]["type"][] = [
       "clear", "clear", "clear", "rain", "drizzle", "fog", "wind", "haze",
@@ -334,12 +437,11 @@ function makeChoice(choice: Choice): void {
   renderTurn(decisionMs).then(() => { isGenerating = false; });
 }
 
-// ─── Keyboard shortcuts ──────────────────────────────────────────
+// ─── Keyboard shortcuts ───────────────────────────────────────────
 
 document.addEventListener("keydown", (e: KeyboardEvent) => {
   const num = parseInt(e.key);
   if (num >= 1 && num <= 9) {
-    const btns = choicesPanel.querySelectorAll("button");
-    (btns[num - 1] as HTMLButtonElement | undefined)?.click();
+    (choicesPanel.querySelectorAll("button")[num - 1] as HTMLButtonElement | undefined)?.click();
   }
 });
