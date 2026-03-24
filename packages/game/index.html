@@ -175,17 +175,52 @@
       color: #d4c4a0;
     }
 
-    /* Memory map placeholder — top-right corner; starts invisible (JS reveals after opening) */
-    #map-placeholder {
+    /* Memory map — compact canvas, top-right corner; starts invisible */
+    #memory-map {
       position: fixed;
       top: 16px;
       right: 16px;
       width: 180px;
       height: 180px;
-      background: #0d0c0a;
-      border: 1px solid #2e2a24;
-      pointer-events: none;
+      display: block;
       opacity: 0;
+      cursor: pointer;
+      transition: opacity 1s;
+    }
+
+    #memory-map.revealed {
+      opacity: 0.75;
+      transition: opacity 1s;
+    }
+
+    #memory-map.revealed:hover {
+      opacity: 1;
+    }
+
+    /* Map overlay for expanded view */
+    #map-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 9, 7, 0.85);
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+      cursor: pointer;
+    }
+
+    #map-overlay.open {
+      display: flex;
+    }
+
+    #memory-map-large {
+      display: block;
+      cursor: default;
+    }
+
+    /* Mobile map toggle */
+    #map-toggle {
+      display: none;
     }
 
     /* Mobile */
@@ -203,8 +238,29 @@
         padding: 36px 24px 44px;
       }
 
-      #map-placeholder {
+      #memory-map {
         display: none;
+      }
+
+      #map-toggle {
+        display: block;
+        position: fixed;
+        bottom: 16px;
+        right: 16px;
+        background: rgba(28, 26, 23, 0.9);
+        border: 1px solid #3a3630;
+        color: #5a5248;
+        font-family: inherit;
+        font-size: 12px;
+        padding: 6px 12px;
+        cursor: pointer;
+        letter-spacing: 0.05em;
+        opacity: 0;
+        transition: opacity 0.5s;
+      }
+
+      #map-toggle.revealed {
+        opacity: 1;
       }
     }
   </style>
@@ -226,7 +282,13 @@
     <div id="status"></div>
     <div id="text-panel"></div>
     <div id="choices"></div>
-    <div id="map-placeholder"></div>
+    <button id="map-toggle">Map</button>
+  </div>
+
+  <!-- Memory map: compact (always present) + expanded overlay -->
+  <canvas id="memory-map" width="180" height="180"></canvas>
+  <div id="map-overlay">
+    <canvas id="memory-map-large" width="540" height="540"></canvas>
   </div>
 
   <script type="module" src="/src/main.ts"></script>

@@ -4,6 +4,7 @@
  */
 
 import type { PerceptualContext } from "./context";
+import type { MemoryAnchor } from "./memory-map";
 
 export interface Position {
   /** Coarse grid x (0 = west edge, MAP_WIDTH = east edge) */
@@ -44,9 +45,22 @@ export interface GameState {
   prevContext: PerceptualContext | null;
   /** Last 3 generated description texts, for the LLM "do not repeat" context */
   recentDescriptions: string[];
+  /** Visited-cell freshness grid (one byte per terrain cell, 0=unseen, 255=current) */
+  visitedGrid: Uint8Array;
+  /** Walk-count grid (one byte per terrain cell, caps at 255) */
+  walkCountGrid: Uint8Array;
+  /** Persistent map landmarks */
+  memoryAnchors: MemoryAnchor[];
 }
 
-export function createInitialState(seed: string, startX: number, startY: number): GameState {
+export function createInitialState(
+  seed: string,
+  startX: number,
+  startY: number,
+  terrainWidth: number,
+  terrainHeight: number,
+): GameState {
+  const total = terrainWidth * terrainHeight;
   return {
     seed,
     position: { x: startX, y: startY },
@@ -56,6 +70,9 @@ export function createInitialState(seed: string, startX: number, startY: number)
     tarryCount: 0,
     prevContext: null,
     recentDescriptions: [],
+    visitedGrid:   new Uint8Array(total),
+    walkCountGrid: new Uint8Array(total),
+    memoryAnchors: [],
   };
 }
 

@@ -16,6 +16,7 @@ import { queryWorld, WorldQuery } from "./world";
 import { buildSituation } from "./situation";
 import { generateChoices, Choice } from "./choices";
 import { buildContext, selectMode, getModeInstruction, DescriptionMode } from "./context";
+import { computeVisibilityRadius, updateVisitedGrid, renderMemoryMap } from "./memory-map";
 
 // ─── Config ──────────────────────────────────────────────────────
 const MAP_WIDTH  = 300;
@@ -68,16 +69,20 @@ let fragments:   Fragment[]        = [];
 let isGenerating                   = false;
 let choicesShownAt                 = 0;
 let turnNumber                     = 0; // player choices made post-opening
+let mapExpanded                    = false;
 
 // ─── DOM ─────────────────────────────────────────────────────────
-const startScreen    = document.getElementById("start-screen")    as HTMLElement;
-const gameLayout     = document.getElementById("game-layout")     as HTMLElement;
-const statusBar      = document.getElementById("status")          as HTMLElement;
-const textPanel      = document.getElementById("text-panel")      as HTMLElement;
-const choicesPanel   = document.getElementById("choices")         as HTMLElement;
-const mapPlaceholder = document.getElementById("map-placeholder") as HTMLElement;
-const seedInput      = document.getElementById("seed")            as HTMLInputElement;
-const startBtn       = document.getElementById("start-btn")       as HTMLButtonElement;
+const startScreen    = document.getElementById("start-screen")     as HTMLElement;
+const gameLayout     = document.getElementById("game-layout")      as HTMLElement;
+const statusBar      = document.getElementById("status")           as HTMLElement;
+const textPanel      = document.getElementById("text-panel")       as HTMLElement;
+const choicesPanel   = document.getElementById("choices")          as HTMLElement;
+const mapCanvas      = document.getElementById("memory-map")       as HTMLCanvasElement;
+const mapOverlay     = document.getElementById("map-overlay")      as HTMLElement;
+const mapLargeCanvas = document.getElementById("memory-map-large") as HTMLCanvasElement;
+const mapToggle      = document.getElementById("map-toggle")       as HTMLButtonElement;
+const seedInput      = document.getElementById("seed")             as HTMLInputElement;
+const startBtn       = document.getElementById("start-btn")        as HTMLButtonElement;
 
 fragments = loadFragments();
 
@@ -180,6 +185,64 @@ function updateStatus(world: WorldQuery, state: GameState): void {
     `${world.geoInfo.label} · ${world.altitudeMetres}m · ${seasonLabel} · ${timeLabel} · ${weatherLabels[state.weather.type] ?? state.weather.type}`;
 }
 
+// ─── Memory map ──────────────────────────────────────────────────
+
+/**
+ * Update the visited/walkCount grids then re-render both map canvases.
+ * timeCostHours = 0 for the opening reveal (no movement yet).
+ */
+function drawMap(timeCostHours: number): void {
+  if (!terrain || !gameState) return;
+  const { x, y } = gameState.position;
+  const cell      = terrain.cells[y][x];
+  const visRadius = computeVisibilityRadius(cell, gameState.weather.type, gameState.time.hour);
+
+  updateVisitedGrid(
+    terrain, gameState.visitedGrid, gameState.walkCountGrid,
+    x, y, visRadius, timeCostHours,
+  );
+  renderMemoryMap(
+    mapCanvas, terrain,
+    gameState.visitedGrid, gameState.walkCountGrid,
+    gameState.memoryAnchors, x, y, visRadius,
+  );
+  if (mapExpanded) {
+    renderMemoryMap(
+      mapLargeCanvas, terrain,
+      gameState.visitedGrid, gameState.walkCountGrid,
+      gameState.memoryAnchors, x, y, visRadius,
+    );
+  }
+}
+
+function openMapOverlay(): void {
+  if (!terrain || !gameState) return;
+  mapExpanded = true;
+  mapOverlay.classList.add("open");
+  const { x, y } = gameState.position;
+  const cell      = terrain.cells[y][x];
+  const visRadius = computeVisibilityRadius(cell, gameState.weather.type, gameState.time.hour);
+  renderMemoryMap(
+    mapLargeCanvas, terrain,
+    gameState.visitedGrid, gameState.walkCountGrid,
+    gameState.memoryAnchors, x, y, visRadius,
+  );
+}
+
+function closeMapOverlay(): void {
+  mapExpanded = false;
+  mapOverlay.classList.remove("open");
+}
+
+mapCanvas.addEventListener("click", () => openMapOverlay());
+mapToggle.addEventListener("click", () => {
+  if (mapExpanded) closeMapOverlay(); else openMapOverlay();
+});
+mapOverlay.addEventListener("click", (e) => {
+  // Close when clicking the backdrop; ignore clicks on the canvas itself
+  if (e.target === mapOverlay) closeMapOverlay();
+});
+
 // ─── Opening sequence ─────────────────────────────────────────────
 
 /** Split prose into individual sentences for timed reveal. */
@@ -270,16 +333,19 @@ async function playOpeningSequence(): Promise<void> {
   gameState.recentDescriptions   = [description];
   updateStatus(world, gameState);
 
+  // Initial map render (no time has passed yet, so timeCost = 0)
+  drawMap(0);
+
   // ── First choices — 5s pause (section 11) ────────────────────
   const choices = generateChoices(world);
   showChoices(choices, 5000); // Math.max(5000, 4000) = 5000 since turnNumber = 0 < 4
 
-  // Reveal status bar and map placeholder as choices fade in
+  // Reveal status bar and map as choices fade in
   setTimeout(() => {
-    statusBar.style.transition       = "opacity 1s";
-    statusBar.style.opacity          = "1";
-    mapPlaceholder.style.transition  = "opacity 1s";
-    mapPlaceholder.style.opacity     = "1";
+    statusBar.style.transition = "opacity 1s";
+    statusBar.style.opacity    = "1";
+    mapCanvas.classList.add("revealed");
+    mapToggle.classList.add("revealed");
   }, 5000);
 }
 
@@ -305,7 +371,7 @@ function initGame(seed: string): void {
     }
   }
 
-  gameState = createInitialState(seed, startX, startY);
+  gameState = createInitialState(seed, startX, startY, MAP_WIDTH, MAP_HEIGHT);
 }
 
 startBtn.addEventListener("click", async () => {
@@ -317,10 +383,9 @@ startBtn.addEventListener("click", async () => {
   await wait(500);
   startScreen.style.display = "none";
 
-  // Reveal the game layout with status bar and map placeholder invisible
-  statusBar.style.opacity    = "0";
-  mapPlaceholder.style.opacity = "0";
-  gameLayout.style.display   = "flex";
+  // Reveal the game layout (status bar and map canvas start invisible via CSS)
+  statusBar.style.opacity = "0";
+  gameLayout.style.display = "flex";
 
   initGame(seed);
   await playOpeningSequence();
@@ -427,6 +492,8 @@ function makeChoice(choice: Choice): void {
 
   for (let i = 0; i < choice.timeCost; i++) advanceTime(gameState);
 
+  drawMap(choice.timeCost);
+
   if (Math.random() < 0.15) {
     const pool: GameState["weather"]["type"][] = [
       "clear", "clear", "clear", "rain", "drizzle", "fog", "wind", "haze",
@@ -440,6 +507,11 @@ function makeChoice(choice: Choice): void {
 // ─── Keyboard shortcuts ───────────────────────────────────────────
 
 document.addEventListener("keydown", (e: KeyboardEvent) => {
+  if (e.key === "Escape") { closeMapOverlay(); return; }
+  if (e.key === "m" || e.key === "M") {
+    if (mapExpanded) closeMapOverlay(); else openMapOverlay();
+    return;
+  }
   const num = parseInt(e.key);
   if (num >= 1 && num <= 9) {
     (choicesPanel.querySelectorAll("button")[num - 1] as HTMLButtonElement | undefined)?.click();
