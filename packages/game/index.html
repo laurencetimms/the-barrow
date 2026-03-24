@@ -4,168 +4,213 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>The Barrow</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap');
-
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-
-    body {
-      background: #1c1a17;
-      color: #c4b9a8;
-      font-family: 'EB Garamond', Georgia, serif;
-      height: 100vh;
-      overflow: hidden;
+    *, *::before, *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
     }
 
-    .start-screen {
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      scrollbar-width: none;
+      background: #1c1a17;
+      color: #d4caba;
+      font-family: 'EB Garamond', Georgia, serif;
+    }
+
+    html::-webkit-scrollbar,
+    body::-webkit-scrollbar {
+      display: none;
+    }
+
+    /* ─── Start screen ──────────────────────────────────────── */
+
+    #start-screen {
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       height: 100vh;
-      gap: 20px;
+      gap: 16px;
     }
 
-    .start-screen h1 {
-      font-size: 28px;
+    #start-screen h1 {
+      font-size: 20px;
       font-weight: 400;
-      letter-spacing: 0.15em;
-      text-transform: uppercase;
+      font-variant: small-caps;
+      letter-spacing: 0.2em;
       color: #8a8078;
     }
 
-    .start-screen .tagline {
-      font-size: 15px;
-      color: #5a5248;
+    #start-screen .tagline {
+      font-size: 16px;
       font-style: italic;
-      margin-bottom: 20px;
+      color: #5a5248;
     }
 
     .start-controls {
       display: flex;
-      gap: 10px;
       align-items: center;
+      gap: 10px;
+      margin-top: 10px;
     }
 
     .start-controls input {
-      background: #2a2620;
+      background: #242018;
       border: 1px solid #3a3630;
-      color: #c4b9a8;
-      padding: 8px 12px;
+      color: #d4caba;
+      padding: 8px 14px;
       font-family: inherit;
-      font-size: 14px;
+      font-size: 15px;
       width: 160px;
-      border-radius: 4px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .start-controls input:focus {
+      border-color: #5a5040;
     }
 
     .start-controls button {
-      background: #2e2a22;
-      border: 1px solid #5a5040;
-      color: #b8a88a;
-      padding: 8px 20px;
+      background: transparent;
+      border: 1px solid #4a4438;
+      color: #9a9080;
+      padding: 8px 22px;
       font-family: inherit;
-      font-size: 14px;
+      font-size: 15px;
+      letter-spacing: 0.05em;
       cursor: pointer;
-      border-radius: 4px;
+      transition: color 0.15s, border-color 0.15s;
     }
 
-    .start-controls button:hover { background: #3e3a32; }
+    .start-controls button:hover {
+      color: #d4caba;
+      border-color: #6a6050;
+    }
 
-    /* ─── Game layout ─── */
-    .game-layout {
+    /* ─── Game layout ───────────────────────────────────────── */
+
+    #game-layout {
       display: none;
+      flex-direction: column;
       height: 100vh;
-    }
-
-    .game-layout.active {
-      display: flex;
-    }
-
-    .map-panel {
-      width: 400px;
-      min-width: 300px;
-      border-right: 1px solid #2a2620;
-      display: flex;
-      flex-direction: column;
-    }
-
-    .map-panel canvas {
-      flex: 1;
-      width: 100%;
-    }
-
-    .text-game-panel {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
       overflow: hidden;
     }
 
+    /* Status line — top of text panel */
     #status {
-      padding: 8px 24px;
-      font-size: 12px;
+      flex-shrink: 0;
+      padding: 10px 48px;
+      max-width: 636px; /* 540px text + 48px each side */
+      margin: 0 auto;
+      width: 100%;
+      font-size: 11px;
       color: #5a5248;
-      letter-spacing: 0.05em;
-      border-bottom: 1px solid #2a2620;
+      letter-spacing: 0.04em;
     }
 
+    /* Scrollable prose area */
     #text-panel {
       flex: 1;
-      padding: 32px 36px;
       overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
+      scrollbar-width: none;
+      padding: 16px 0 24px;
+    }
+
+    #text-panel::-webkit-scrollbar {
+      display: none;
     }
 
     #text-panel p {
+      max-width: 540px;
+      margin: 0 auto;
+      padding: 0 48px;
       font-size: 19px;
       line-height: 1.75;
       color: #d4caba;
-      max-width: 520px;
     }
 
-    #text-panel .generating {
-      color: #5a5248;
+    #text-panel p + p {
+      margin-top: 1.1em;
+    }
+
+    #text-panel p.generating {
       font-style: italic;
-      font-size: 14px;
+      font-size: 15px;
+      color: #5a5248;
     }
 
+    /* Choices — below prose, fade in */
     #choices {
-      padding: 16px 36px 24px;
-      border-top: 1px solid #2a2620;
+      flex-shrink: 0;
+      max-width: 540px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 36px 48px 44px;
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 8px;
+      opacity: 0;
     }
 
-    .choice-btn {
-      background: #222018;
-      border: 1px solid #3a3630;
+    #choices button {
+      background: none;
+      border: none;
       color: #b0a890;
-      padding: 10px 16px;
       font-family: inherit;
       font-size: 15px;
       cursor: pointer;
-      border-radius: 4px;
       text-align: left;
-      transition: all 0.15s;
+      padding: 1px 0;
+      transition: color 0.15s;
     }
 
-    .choice-btn:hover {
-      background: #2e2a22;
-      border-color: #5a5040;
+    #choices button:hover {
       color: #d4c4a0;
     }
 
+    /* Memory map placeholder — top-right corner */
+    #map-placeholder {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      width: 180px;
+      height: 180px;
+      background: #0d0c0a;
+      border: 1px solid #2e2a24;
+      pointer-events: none;
+    }
+
+    /* Mobile */
     @media (max-width: 768px) {
-      .game-layout.active { flex-direction: column; }
-      .map-panel { width: 100%; height: 200px; min-width: auto; border-right: none; border-bottom: 1px solid #2a2620; }
+      #status {
+        padding: 10px 24px;
+        max-width: 100%;
+      }
+
+      #text-panel p {
+        padding: 0 24px;
+      }
+
+      #choices {
+        padding: 36px 24px 44px;
+      }
+
+      #map-placeholder {
+        display: none;
+      }
     }
   </style>
 </head>
 <body>
-  <div class="start-screen" id="start-screen">
+
+  <!-- Start screen -->
+  <div id="start-screen">
     <h1>The Barrow</h1>
     <p class="tagline">You emerge from the dark into daylight.</p>
     <div class="start-controls">
@@ -174,15 +219,12 @@
     </div>
   </div>
 
-  <div class="game-layout" id="game-layout">
-    <div class="map-panel">
-      <canvas id="map"></canvas>
-    </div>
-    <div class="text-game-panel">
-      <div id="status"></div>
-      <div id="text-panel"></div>
-      <div id="choices"></div>
-    </div>
+  <!-- Game -->
+  <div id="game-layout">
+    <div id="status"></div>
+    <div id="text-panel"></div>
+    <div id="choices"></div>
+    <div id="map-placeholder"></div>
   </div>
 
   <script type="module" src="/src/main.ts"></script>
