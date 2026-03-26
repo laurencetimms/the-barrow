@@ -32,11 +32,12 @@ function scoreFragment(fragment: Fragment, situation: Situation): number {
       score += overlap.length * weight;
       hasMatchedCategory = true;
     } else {
-      // Fragment specifies this category but none match — mild penalty
-      // (except for sense/state which are additive, not exclusive)
-      if (cat !== "sense" && cat !== "state") {
-        score -= 0.5;
-      }
+      // Fragment specifies this category but none match.
+      // weather/season/time: hard exclusion — a snowy fragment has no place on a clear day.
+      // geology/altitude/feature: mild penalty — wrong-geology fragments are less relevant but not absurd.
+      // sense/state: additive tags, never penalised.
+      if (cat === "weather" || cat === "season" || cat === "time") return 0;
+      if (cat !== "sense" && cat !== "state") score -= 0.5;
     }
   }
 
