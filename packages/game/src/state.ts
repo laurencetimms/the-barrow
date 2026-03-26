@@ -5,6 +5,7 @@
 
 import type { PerceptualContext } from "./context";
 import type { MemoryAnchor } from "./memory-map";
+import { type PlayerGraph, createPlayerGraph } from "./player-graph";
 
 export interface Position {
   /** Coarse grid x (0 = west edge, MAP_WIDTH = east edge) */
@@ -53,6 +54,8 @@ export interface GameState {
   walkCountGrid: Uint8Array;
   /** Persistent map landmarks */
   memoryAnchors: MemoryAnchor[];
+  /** Player graph — Body and Land tier node values */
+  playerGraph: PlayerGraph;
 }
 
 export function createInitialState(
@@ -76,6 +79,7 @@ export function createInitialState(
     visitedGrid:   new Uint8Array(total),
     walkCountGrid: new Uint8Array(total),
     memoryAnchors: [],
+    playerGraph:   createPlayerGraph(),
   };
 }
 

@@ -15,7 +15,7 @@ function scoreFragment(fragment: Fragment, situation: Situation): number {
   ];
 
   for (const cat of categories) {
-    const sitTags = situation[cat];
+    const sitTags  = situation[cat];
     const fragTags = fragment.tags[cat];
 
     if (!sitTags || sitTags.length === 0) {
@@ -41,9 +41,9 @@ function scoreFragment(fragment: Fragment, situation: Situation): number {
       hasMatchedCategory = true;
     } else {
       // Fragment specifies this category but none match.
-      // weather/season/time: hard exclusion — a snowy fragment has no place on a clear day.
-      // geology/altitude/feature: mild penalty — wrong-geology fragments are less relevant but not absurd.
-      // sense/state: additive tags, never penalised.
+      // weather/season/time/geology: hard exclusion.
+      // altitude/feature: mild penalty.
+      // sense/state: additive, never penalised.
       if (cat === "geology" || cat === "weather" || cat === "season" || cat === "time") return 0;
       if (cat !== "sense" && cat !== "state") score -= 0.5;
     }
@@ -55,53 +55,94 @@ function scoreFragment(fragment: Fragment, situation: Situation): number {
   return score;
 }
 
+/** Check whether a fragment's minNodes requirements are satisfied. */
+function meetsNodeRequirements(
+  fragment:   Fragment,
+  nodeValues: Record<string, number>,
+): boolean {
+  if (!fragment.minNodes) return true;
+  return Object.entries(fragment.minNodes).every(
+    ([node, min]) => (nodeValues[node] ?? 0) >= min,
+  );
+}
+
 /**
  * Weighted random selection from a scored pool.
  * Probability is proportional to score², so better matches are more likely
  * but not guaranteed — prevents any single fragment dominating stable contexts.
  * Already-selected fragment ids are excluded from subsequent draws.
+ * At most `maxGated` fragments with minNodes may appear (description budget).
  */
 function weightedSelect(
-  pool: { fragment: Fragment; score: number }[],
-  count: number,
-  excludeIds: string[],
+  pool:      { fragment: Fragment; score: number }[],
+  count:     number,
+  excludeIds:string[],
+  maxGated:  number = 1,
 ): { fragment: Fragment; score: number }[] {
   const available = pool.filter(f => !excludeIds.includes(f.fragment.id));
   const selected: { fragment: Fragment; score: number }[] = [];
+  let gatedCount = 0;
 
   for (let i = 0; i < count && available.length > 0; i++) {
-    const totalWeight = available.reduce((sum, f) => sum + f.score * f.score, 0);
+    // When the gated budget is exhausted, draw only from non-gated fragments
+    const candidates = gatedCount >= maxGated
+      ? available.filter(f => !f.fragment.minNodes)
+      : available;
+    if (candidates.length === 0) break;
+
+    const totalWeight = candidates.reduce((sum, f) => sum + f.score * f.score, 0);
     let roll = Math.random() * totalWeight;
     let pick = 0;
-    for (let j = 0; j < available.length; j++) {
-      roll -= available[j].score * available[j].score;
+    for (let j = 0; j < candidates.length; j++) {
+      roll -= candidates[j].score * candidates[j].score;
       if (roll <= 0) { pick = j; break; }
     }
-    selected.push(available.splice(pick, 1)[0]);
+    const chosen = candidates[pick];
+    if (chosen.fragment.minNodes) gatedCount++;
+    const idx = available.indexOf(chosen);
+    if (idx !== -1) available.splice(idx, 1);
+    selected.push(chosen);
   }
 
   return selected;
 }
 
-/** Count how many fragments score > 0 against a situation (for debug display). */
-export function countScoredFragments(fragments: Fragment[], situation: Situation): number {
-  return fragments.filter(f => scoreFragment(f, situation) > 0).length;
+/**
+ * Count how many fragments score > 0 against a situation (for debug display).
+ */
+export function countScoredFragments(
+  fragments:  Fragment[],
+  situation:  Situation,
+  nodeValues?: Record<string, number>,
+): number {
+  const eligible = nodeValues
+    ? fragments.filter(f => meetsNodeRequirements(f, nodeValues))
+    : fragments;
+  return eligible.filter(f => scoreFragment(f, situation) > 0).length;
 }
 
 /**
  * Select the best-matching fragments for a situation.
- * @param excludeIds Fragment ids to exclude (recency filter — pass recent turn ids).
+ * @param excludeIds  Fragment ids to exclude (recency filter).
+ * @param nodeValues  Player-graph node values for minNodes filtering.
+ *                    If omitted, all fragments are eligible (backward compatible).
  */
 export function matchFragments(
-  fragments: Fragment[],
-  situation: Situation,
-  count: number = 4,
+  fragments:  Fragment[],
+  situation:  Situation,
+  count:      number = 4,
   excludeIds: string[] = [],
+  nodeValues?: Record<string, number>,
 ): { fragment: Fragment; score: number }[] {
-  const scored = fragments
+  const eligible = nodeValues
+    ? fragments.filter(f => meetsNodeRequirements(f, nodeValues))
+    : fragments;
+
+  const scored = eligible
     .map(f => ({ fragment: f, score: scoreFragment(f, situation) }))
     .filter(f => f.score > 0)
     .sort((a, b) => b.score - a.score);
 
-  return weightedSelect(scored, count, excludeIds);
+  // Description budget: at most 1 node-gated fragment per selection
+  return weightedSelect(scored, count, excludeIds, 1);
 }

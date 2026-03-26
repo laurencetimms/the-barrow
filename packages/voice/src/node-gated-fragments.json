@@ -1,0 +1,290 @@
+[
+  {
+    "id": "ng-shelter-low-01",
+    "text": "A natural hollow in the rock face. The ground inside is dry.",
+    "tags": { "sense": ["sight", "touch"] },
+    "minNodes": { "shelter": 0.2 }
+  },
+  {
+    "id": "ng-shelter-low-02",
+    "text": "The fallen oak makes a roof. Dry leaves banked on the lee side.",
+    "tags": { "sense": ["sight"] },
+    "minNodes": { "shelter": 0.2 }
+  },
+  {
+    "id": "ng-shelter-low-03",
+    "text": "The cliff face overhangs here. Dry ground beneath — maybe two arm-lengths deep.",
+    "tags": { "sense": ["sight", "touch"] },
+    "minNodes": { "shelter": 0.2 }
+  },
+  {
+    "id": "ng-shelter-low-04",
+    "text": "Dense yew, dark and close. The wind can't reach inside. The ground is dry.",
+    "tags": { "sense": ["sight", "touch"] },
+    "minNodes": { "shelter": 0.2 }
+  },
+  {
+    "id": "ng-shelter-high-01",
+    "text": "The overhang faces south. Wind from the north won't touch it. Room enough to lie down, and the rock will hold the day's warmth.",
+    "tags": { "sense": ["sight", "touch", "body-sense"] },
+    "minNodes": { "shelter": 0.55 }
+  },
+  {
+    "id": "ng-shelter-high-02",
+    "text": "Bracken enough for a good bed. The hollow blocks three sides of the wind. This would hold in rain.",
+    "tags": { "sense": ["sight", "touch"] },
+    "minNodes": { "shelter": 0.55 }
+  },
+  {
+    "id": "ng-shelter-high-03",
+    "text": "Good camp here. The slope drains away from it. The stream is close but not too close.",
+    "tags": { "sense": ["sight"], "feature": ["river"] },
+    "minNodes": { "shelter": 0.55 }
+  },
+
+  {
+    "id": "ng-food-low-01",
+    "text": "Crab apples in the hedgerow. Small, sour.",
+    "tags": { "sense": ["sight"] },
+    "minNodes": { "food": 0.2 }
+  },
+  {
+    "id": "ng-food-low-02",
+    "text": "Dock leaves thick at the stream edge. The roots are starchy.",
+    "tags": { "sense": ["sight"], "feature": ["river"] },
+    "minNodes": { "food": 0.2 }
+  },
+  {
+    "id": "ng-food-low-03",
+    "text": "Hazelnuts. Not ripe yet — but close.",
+    "tags": { "sense": ["sight"] },
+    "minNodes": { "food": 0.2 }
+  },
+  {
+    "id": "ng-food-low-04",
+    "text": "Blackberries on the south face of the scrub. The ones in full sun are ripe.",
+    "tags": { "sense": ["sight", "smell"] },
+    "minNodes": { "food": 0.2 }
+  },
+  {
+    "id": "ng-food-high-01",
+    "text": "Sorrel growing thick in the grass. Sharp flavour. Good raw.",
+    "tags": { "sense": ["sight", "smell"] },
+    "minNodes": { "food": 0.5 }
+  },
+  {
+    "id": "ng-food-high-02",
+    "text": "Wild garlic — the smell carries before you see it. Under the trees, along the stream.",
+    "tags": { "sense": ["sight", "smell"], "feature": ["river"] },
+    "minNodes": { "food": 0.5 }
+  },
+  {
+    "id": "ng-food-high-03",
+    "text": "Crab apples past their best, but a frost will have sweetened them. Worth remembering this spot.",
+    "tags": { "sense": ["sight"] },
+    "minNodes": { "food": 0.5 }
+  },
+  {
+    "id": "ng-food-high-04",
+    "text": "Meadowsweet by the water. Good for fever — the leaves dried.",
+    "tags": { "sense": ["sight", "smell"], "feature": ["river"] },
+    "minNodes": { "food": 0.5 }
+  },
+
+  {
+    "id": "ng-animals-low-01",
+    "text": "Tracks in the soft ground. Cloven hooves. Something heavy.",
+    "tags": { "sense": ["sight"] },
+    "minNodes": { "animalSigns": 0.15 }
+  },
+  {
+    "id": "ng-animals-low-02",
+    "text": "A bird of prey circling. Something moving in the grass below.",
+    "tags": { "sense": ["sight"] },
+    "minNodes": { "animalSigns": 0.15 }
+  },
+  {
+    "id": "ng-animals-low-03",
+    "text": "The undergrowth moved. Too large for a rabbit.",
+    "tags": { "sense": ["sight", "sound"] },
+    "minNodes": { "animalSigns": 0.15 }
+  },
+  {
+    "id": "ng-animals-low-04",
+    "text": "Droppings on the path. Deer, or something similar.",
+    "tags": { "sense": ["sight"] },
+    "minNodes": { "animalSigns": 0.15 }
+  },
+  {
+    "id": "ng-animals-high-01",
+    "text": "Deer tracks heading uphill — a doe, probably. The stride is narrow. The prints are fresh.",
+    "tags": { "sense": ["sight"] },
+    "minNodes": { "animalSigns": 0.45 }
+  },
+  {
+    "id": "ng-animals-high-02",
+    "text": "Birdsong stopped thirty paces back. Something is watching from the treeline.",
+    "tags": { "sense": ["sound"] },
+    "minNodes": { "animalSigns": 0.45 }
+  },
+  {
+    "id": "ng-animals-high-03",
+    "text": "An otter slide on the bank. Fish bones at the water's edge. The water is clean here.",
+    "tags": { "sense": ["sight"], "feature": ["river"] },
+    "minNodes": { "animalSigns": 0.45 }
+  },
+  {
+    "id": "ng-animals-high-04",
+    "text": "The deer path leads downhill. It will go to water. Worn enough to follow.",
+    "tags": { "sense": ["sight"] },
+    "minNodes": { "animalSigns": 0.45 }
+  },
+
+  {
+    "id": "ng-body-sense-low-01",
+    "text": "Something in the air here. Hard to name.",
+    "tags": { "sense": ["body-sense"] },
+    "minNodes": { "bodySense": 0.15 }
+  },
+  {
+    "id": "ng-body-sense-low-02",
+    "text": "The backs of your knees feel strange. The ground is level — but something is off.",
+    "tags": { "sense": ["body-sense", "touch"] },
+    "minNodes": { "bodySense": 0.15 }
+  },
+  {
+    "id": "ng-body-sense-low-03",
+    "text": "A prickling on the back of your neck. The air is still.",
+    "tags": { "sense": ["body-sense", "touch"] },
+    "minNodes": { "bodySense": 0.15 }
+  },
+  {
+    "id": "ng-body-sense-high-01",
+    "text": "Your skin prickles. Not cold. This place is not empty.",
+    "tags": { "sense": ["body-sense", "touch"] },
+    "minNodes": { "bodySense": 0.45 }
+  },
+  {
+    "id": "ng-body-sense-high-02",
+    "text": "The feeling from the cave. Here again, fainter — but the same.",
+    "tags": { "sense": ["body-sense"] },
+    "minNodes": { "bodySense": 0.45 }
+  },
+  {
+    "id": "ng-body-sense-high-03",
+    "text": "The ground feels thin here. You know this feeling now.",
+    "tags": { "sense": ["body-sense", "touch"] },
+    "minNodes": { "bodySense": 0.45 }
+  },
+
+  {
+    "id": "ng-paths-low-01",
+    "text": "The ground is worn here. Not a path — but something passes this way.",
+    "tags": { "sense": ["sight"] },
+    "minNodes": { "paths": 0.25 }
+  },
+  {
+    "id": "ng-paths-low-02",
+    "text": "An animal trail through the bracken. Going downhill.",
+    "tags": { "sense": ["sight"] },
+    "minNodes": { "paths": 0.25 }
+  },
+  {
+    "id": "ng-paths-low-03",
+    "text": "A line in the turf. Old, but the direction is there.",
+    "tags": { "sense": ["sight"] },
+    "minNodes": { "paths": 0.25 }
+  },
+  {
+    "id": "ng-paths-high-01",
+    "text": "An old trackway. The turf is different where feet have compressed the soil for years.",
+    "tags": { "sense": ["sight", "touch"] },
+    "minNodes": { "paths": 0.55 }
+  },
+  {
+    "id": "ng-paths-high-02",
+    "text": "The ridge continues northeast. Firm ground, good walking.",
+    "tags": { "sense": ["sight", "body-sense"], "altitude": ["ridgeline"] },
+    "minNodes": { "paths": 0.55 }
+  },
+  {
+    "id": "ng-paths-high-03",
+    "text": "This valley connects to the one you came through. The watershed will be to the east.",
+    "tags": { "sense": ["sight"], "altitude": ["valley-floor"] },
+    "minNodes": { "paths": 0.55 }
+  },
+
+  {
+    "id": "ng-weather-low-01",
+    "text": "The wind has shifted. West now, where it was from the north.",
+    "tags": { "sense": ["body-sense", "touch"] },
+    "minNodes": { "weather": 0.25 }
+  },
+  {
+    "id": "ng-weather-low-02",
+    "text": "Cloud building to the southwest. It'll be here by evening.",
+    "tags": { "sense": ["sight"] },
+    "minNodes": { "weather": 0.25 }
+  },
+  {
+    "id": "ng-weather-low-03",
+    "text": "The air feels different. Closer.",
+    "tags": { "sense": ["body-sense", "smell"] },
+    "minNodes": { "weather": 0.25 }
+  },
+  {
+    "id": "ng-weather-high-01",
+    "text": "Two days of this at least. The cloud base is low and getting lower.",
+    "tags": { "sense": ["sight"] },
+    "minNodes": { "weather": 0.55 }
+  },
+  {
+    "id": "ng-weather-high-02",
+    "text": "Rain before dark. The air smells of wet earth from the west.",
+    "tags": { "sense": ["smell", "body-sense"] },
+    "minNodes": { "weather": 0.55 }
+  },
+  {
+    "id": "ng-weather-high-03",
+    "text": "Good walking weather for now. The wind will hold it off until evening.",
+    "tags": { "sense": ["body-sense"] },
+    "minNodes": { "weather": 0.55 }
+  },
+
+  {
+    "id": "ng-foraging-low-01",
+    "text": "Nettles at the stream edge. Edible if cooked — worth knowing.",
+    "tags": { "sense": ["sight"], "feature": ["river"] },
+    "minNodes": { "foraging": 0.2 }
+  },
+  {
+    "id": "ng-foraging-low-02",
+    "text": "Hazel catkins. The nuts will come in late summer.",
+    "tags": { "sense": ["sight"] },
+    "minNodes": { "foraging": 0.2 }
+  },
+  {
+    "id": "ng-foraging-low-03",
+    "text": "Wild thyme on the chalk. Useful — good for cough, and it dries well.",
+    "tags": { "sense": ["sight", "smell"], "geology": ["chalk"] },
+    "minNodes": { "foraging": 0.2 }
+  },
+  {
+    "id": "ng-foraging-high-01",
+    "text": "Woundwort near the stream. The wise woman uses this for wounds. Worth gathering.",
+    "tags": { "sense": ["sight"], "feature": ["river"] },
+    "minNodes": { "foraging": 0.5 }
+  },
+  {
+    "id": "ng-foraging-high-02",
+    "text": "These roots are best dug after frost — the cold breaks the starch down. Remember this spot.",
+    "tags": { "sense": ["sight"] },
+    "minNodes": { "foraging": 0.5 }
+  },
+  {
+    "id": "ng-foraging-high-03",
+    "text": "Wood sorrel in the shade. Sharp and fresh. Good eating raw.",
+    "tags": { "sense": ["sight", "smell"] },
+    "minNodes": { "foraging": 0.5 }
+  }
+]

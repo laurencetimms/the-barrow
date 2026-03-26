@@ -429,6 +429,10 @@ An alternative approach: no persistent status line. Instead, the player can acce
 
 These things exist in the game state but they are never displayed numerically. The player reads their state through the voice layer — they know they're hungry because the text mentions it, they know they're cold because the descriptions mention it, they know they've learned something because new choices appear and new details are noticed. The interface never abstracts the experience into numbers.
 
+### 8.4 Debug Panel (Development Only)
+
+The debug panel shows all player graph node values: Shelter, Food, Body Sense, Paths, Foraging, Weather, Animal Signs, and Practice sub-values (shelter-building, fire-making, flint-knapping, woodworking, herb-gathering). These are displayed as float values to two decimal places, updating each turn. The debug panel also shows which node-gated observations were considered for the current turn and which one was selected by the description budget.
+
 ---
 
 ## 9. Sound

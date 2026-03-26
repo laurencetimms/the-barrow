@@ -21,6 +21,9 @@ import { buildContext, selectMode, getModeInstruction, DescriptionMode } from ".
 import { executeTravelSequence } from "./travel";
 import type { TravelResult, TravelStopReason } from "./travel";
 import { computeVisibilityRadius, updateVisitedGrid, renderMemoryMap } from "./memory-map";
+import { getNodeValues } from "./player-graph";
+import { updateGraph, buildTurnInfo } from "./graph-updater";
+import type { GraphUpdateResult } from "./graph-updater";
 
 // ─── Config ──────────────────────────────────────────────────────
 const MAP_WIDTH  = 300;
@@ -79,6 +82,7 @@ let mapExpanded                         = false;
 let lastClearReason                     = "—";
 let weatherChangeTurn                   = 0;
 let lastTravel: (TravelResult & { bearingName: string; startGeoLabel: string; arrivalMode: DescriptionMode | null }) | null = null;
+let lastGraphUpdate: GraphUpdateResult | null = null;
 
 // ─── DOM ─────────────────────────────────────────────────────────
 const startScreen    = document.getElementById("start-screen")     as HTMLElement;
@@ -343,7 +347,8 @@ async function generateOpeningDescription(): Promise<{ text: string; fragmentIds
 
   const world     = queryWorld(terrain, gameState.position.x, gameState.position.y);
   const situation = buildSituation(world, gameState);
-  const matched   = sortMatchedFragments(matchFragments(fragments, situation, 4, gameState.recentFragmentIds));
+  const nodeValues = getNodeValues(gameState.playerGraph);
+  const matched   = sortMatchedFragments(matchFragments(fragments, situation, 4, gameState.recentFragmentIds, nodeValues));
   const apiKey    = loadApiKey();
   const ids       = matched.map(m => m.fragment.id);
 
@@ -412,7 +417,7 @@ async function playOpeningSequence(): Promise<void> {
   drawMap(0);
 
   // ── First choices — 5s pause (section 11) ────────────────────
-  const choices = generateChoices(world, terrain, gameState.position.x, gameState.position.y);
+  const choices = generateChoices(world, terrain, gameState.position.x, gameState.position.y, gameState.playerGraph);
   showChoices(choices, 5000); // Math.max(5000, 4000) = 5000 since turnNumber = 0 < 4
 
   // Reveal status bar and map as choices fade in
@@ -498,7 +503,7 @@ async function renderTravelTurn(
     "movement",
   ];
 
-  const travelMatched   = sortMatchedFragments(matchFragments(fragments, travelSituation, FRAGMENT_COUNTS["travel"], gameState.recentFragmentIds));
+  const travelMatched   = sortMatchedFragments(matchFragments(fragments, travelSituation, FRAGMENT_COUNTS["travel"], gameState.recentFragmentIds, getNodeValues(gameState.playerGraph)));
   const notableStr      = result.notables.join(", ");
   const apiKey          = loadApiKey();
 
@@ -551,15 +556,16 @@ async function renderTravelTurn(
   if (arrivalMode === null) {
     // Max-distance — just the travel narrative, then choices
     gameState.prevContext = currContext;
-    const choices = generateChoices(world, terrain, gameState.position.x, gameState.position.y);
+    const choices = generateChoices(world, terrain, gameState.position.x, gameState.position.y, gameState.playerGraph);
     showChoices(choices, 2500);
 
     updateDebugPanel(debugPanel, {
       state: gameState, world, currContext, prevContext: gameState.prevContext,
       mode: "travel", decisionMs,
-      voice: { situation: travelSituation, totalScored: countScoredFragments(fragments, travelSituation), matched: travelMatched, recentFragmentIds: gameState.recentFragmentIds, instruction: travelInstruction },
+      voice: { situation: travelSituation, totalScored: countScoredFragments(fragments, travelSituation, getNodeValues(gameState.playerGraph)), matched: travelMatched, recentFragmentIds: gameState.recentFragmentIds, instruction: travelInstruction },
       choices, pageWordCount: pageWordCount(), lastClearReason, weatherChangeTurn,
       mapWidth: MAP_WIDTH, mapHeight: MAP_HEIGHT, lastTravel,
+      graphUpdate: lastGraphUpdate, playerGraph: gameState.playerGraph,
     });
     return;
   }
@@ -572,8 +578,8 @@ async function renderTravelTurn(
   }
 
   const arrivalSituation   = buildSituation(world, gameState);
-  const totalScored        = countScoredFragments(fragments, arrivalSituation);
-  const arrivalMatched     = sortMatchedFragments(matchFragments(fragments, arrivalSituation, FRAGMENT_COUNTS[arrivalMode], gameState.recentFragmentIds));
+  const totalScored        = countScoredFragments(fragments, arrivalSituation, getNodeValues(gameState.playerGraph));
+  const arrivalMatched     = sortMatchedFragments(matchFragments(fragments, arrivalSituation, FRAGMENT_COUNTS[arrivalMode], gameState.recentFragmentIds, getNodeValues(gameState.playerGraph)));
   const arrivalInstruction = getModeInstruction(arrivalMode, gameState.tarryCount);
 
   let arrivalLoadingP: HTMLParagraphElement | null = null;
@@ -608,7 +614,7 @@ async function renderTravelTurn(
   gameState.recentFragmentIds   = [...arrivalMatched.map(m => m.fragment.id), ...gameState.recentFragmentIds].slice(0, 15);
 
   const arrivalBehavior = getPageBehavior(arrivalMode, decisionMs);
-  const choices         = generateChoices(world, terrain, gameState.position.x, gameState.position.y);
+  const choices         = generateChoices(world, terrain, gameState.position.x, gameState.position.y, gameState.playerGraph);
   showChoices(choices, arrivalBehavior.choicesDelayMs);
 
   updateDebugPanel(debugPanel, {
@@ -617,6 +623,7 @@ async function renderTravelTurn(
     voice: { situation: arrivalSituation, totalScored, matched: arrivalMatched, recentFragmentIds: gameState.recentFragmentIds, instruction: arrivalInstruction },
     choices, pageWordCount: pageWordCount(), lastClearReason, weatherChangeTurn,
     mapWidth: MAP_WIDTH, mapHeight: MAP_HEIGHT, lastTravel,
+    graphUpdate: lastGraphUpdate, playerGraph: gameState.playerGraph,
   });
 }
 
@@ -642,8 +649,8 @@ async function renderTurn(decisionMs: number): Promise<void> {
   }
 
   const situation    = buildSituation(world, gameState);
-  const totalScored  = countScoredFragments(fragments, situation);
-  const matched      = sortMatchedFragments(matchFragments(fragments, situation, fragCount, gameState.recentFragmentIds));
+  const totalScored  = countScoredFragments(fragments, situation, getNodeValues(gameState.playerGraph));
+  const matched      = sortMatchedFragments(matchFragments(fragments, situation, fragCount, gameState.recentFragmentIds, getNodeValues(gameState.playerGraph)));
   const apiKey      = loadApiKey();
   const instruction = getModeInstruction(mode, gameState.tarryCount, transitionWhat);
 
@@ -686,7 +693,7 @@ async function renderTurn(decisionMs: number): Promise<void> {
     ...gameState.recentFragmentIds,
   ].slice(0, 15);
 
-  const choices = generateChoices(world, terrain, gameState.position.x, gameState.position.y);
+  const choices = generateChoices(world, terrain, gameState.position.x, gameState.position.y, gameState.playerGraph);
   showChoices(choices, behavior.choicesDelayMs);
 
   updateDebugPanel(debugPanel, {
@@ -711,6 +718,8 @@ async function renderTurn(decisionMs: number): Promise<void> {
     mapWidth:  MAP_WIDTH,
     mapHeight: MAP_HEIGHT,
     lastTravel,
+    graphUpdate: lastGraphUpdate,
+    playerGraph: gameState.playerGraph,
   });
 }
 
@@ -771,12 +780,19 @@ function makeChoice(choice: Choice): void {
       }
     }
 
+    // Update player graph after position and time are finalised
+    const currWorldForGraph = queryWorld(terrain, gameState.position.x, gameState.position.y);
+    const currCtxForGraph   = buildContext(currWorldForGraph, gameState.weather.type, gameState.time.hour);
+    const turnInfo = buildTurnInfo(choice.dx, choice.dy, result.cellsCovered, startContext, currCtxForGraph);
+    lastGraphUpdate = updateGraph(gameState.playerGraph, turnInfo, startContext, currCtxForGraph, currWorldForGraph, gameState);
+
     drawMap(steps);
     renderTravelTurn(result, startX, startY, choice.dx, choice.dy, decisionMs)
       .then(() => { isGenerating = false; });
 
   } else {
     // Immediate action: single-cell move (or wait)
+    const prevCtxForGraph = gameState.prevContext;
     gameState.position.x = Math.max(0, Math.min(MAP_WIDTH  - 1, startX + choice.dx));
     gameState.position.y = Math.max(0, Math.min(MAP_HEIGHT - 1, startY + choice.dy));
 
@@ -790,6 +806,12 @@ function makeChoice(choice: Choice): void {
         weatherChangeTurn = gameState.turns;
       }
     }
+
+    // Update player graph after position and time are finalised
+    const currWorldForGraph2 = queryWorld(terrain, gameState.position.x, gameState.position.y);
+    const currCtxForGraph2   = buildContext(currWorldForGraph2, gameState.weather.type, gameState.time.hour);
+    const turnInfo2 = buildTurnInfo(choice.dx, choice.dy, 1, prevCtxForGraph, currCtxForGraph2);
+    lastGraphUpdate = updateGraph(gameState.playerGraph, turnInfo2, prevCtxForGraph, currCtxForGraph2, currWorldForGraph2, gameState);
 
     drawMap(choice.timeCost);
     renderTurn(decisionMs).then(() => { isGenerating = false; });

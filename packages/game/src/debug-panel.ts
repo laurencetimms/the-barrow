@@ -8,6 +8,8 @@ import type { WorldQuery } from "./world";
 import type { PerceptualContext, DescriptionMode } from "./context";
 import type { Choice } from "./choices";
 import type { Situation } from "@the-barrow/voice";
+import type { PlayerGraph } from "./player-graph";
+import type { GraphUpdateResult } from "./graph-updater";
 
 export interface DebugVoiceInfo {
   situation: Situation;
@@ -40,6 +42,8 @@ export interface DebugInfo {
     notables:      string[];
     arrivalMode:   string | null;
   } | null;
+  graphUpdate?: GraphUpdateResult | null;
+  playerGraph?: PlayerGraph | null;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────
@@ -245,6 +249,66 @@ function lastTravelSection(info: DebugInfo): string | null {
   return section("Last Travel", lines.join("\n"));
 }
 
+function playerGraphSection(info: DebugInfo): string | null {
+  const { playerGraph, graphUpdate } = info;
+  if (!playerGraph) return null;
+
+  const sp   = graphUpdate?.seasonalPressure;
+  const incs = graphUpdate?.increments ?? [];
+
+  function incFor(node: string): string {
+    const total = incs
+      .filter(i => i.node === node)
+      .reduce((s, i) => s + i.amount, 0);
+    if (total === 0) return "";
+    const reason = incs.filter(i => i.node === node).map(i => i.reason).join(", ");
+    return ` (+${total.toFixed(4)} — ${reason})`;
+  }
+
+  const g = playerGraph;
+  const lines = [
+    "BODY",
+    `  Shelter:     ${g.shelter.value.toFixed(2)}${incFor("shelter")}`,
+    `  Food:        ${g.food.value.toFixed(2)}${incFor("food")}`,
+    `  Body Sense:  ${g.bodySense.value.toFixed(2)}${incFor("bodySense")}`,
+    "",
+    "LAND",
+    `  Paths:       ${g.paths.value.toFixed(2)}${incFor("paths")}`,
+    `  Foraging:    ${g.foraging.value.toFixed(2)}${incFor("foraging")}`,
+    `  Weather:     ${g.weather.value.toFixed(2)}${incFor("weather")}`,
+    `  Animals:     ${g.animalSigns.value.toFixed(2)}${incFor("animalSigns")}`,
+    "",
+    "PRACTICE",
+    `  shelter: ${g.practice.shelterBuilding.toFixed(2)}  fire: ${g.practice.fireMaking.toFixed(2)}  flint: ${g.practice.flintKnapping.toFixed(2)}`,
+    `  wood:    ${g.practice.woodworking.toFixed(2)}  herbs: ${g.practice.herbGathering.toFixed(2)}`,
+  ];
+
+  if (sp && (sp.shelter > 0 || sp.food > 0)) {
+    lines.push("");
+    const seasons = ["spring", "summer", "autumn", "winter"];
+    const sName   = seasons[info.state.time.season] ?? "";
+    lines.push(`Seasonal pressure (${sName}): shelter -${sp.shelter.toFixed(2)}, food -${sp.food.toFixed(2)}`);
+  }
+
+  // Show gated fragments from matched voice
+  const gated = info.voice.matched.filter(m =>
+    (m.fragment as unknown as { minNodes?: Record<string, number> }).minNodes,
+  );
+  if (gated.length > 0) {
+    lines.push("");
+    lines.push(`Node obs: ${gated.map(m => m.fragment.id).join(", ")}`);
+  }
+
+  // Show gated choices added this turn
+  const gatedChoiceIds = ["shelter-overhang","forage-herbs","follow-animal-trail","seek-shelter-weather","attend-body-sense"];
+  const gatedChoices   = info.choices.filter(c => gatedChoiceIds.includes(c.id));
+  if (gatedChoices.length > 0) {
+    lines.push(`Gated choices: ${gatedChoices.map(c => `"${c.text}"`).join(", ")}`);
+  }
+
+  return section("Player Graph", lines.join("\n"));
+}
+
 // ─── Main export ─────────────────────────────────────────────────
 
 export function updateDebugPanel(el: HTMLElement, info: DebugInfo): void {
@@ -264,6 +328,9 @@ export function updateDebugPanel(el: HTMLElement, info: DebugInfo): void {
 
   const travel = lastTravelSection(info);
   if (travel) parts.push(travel);
+
+  const graph = playerGraphSection(info);
+  if (graph) parts.push(graph);
 
   el.innerHTML = parts.join("");
 }

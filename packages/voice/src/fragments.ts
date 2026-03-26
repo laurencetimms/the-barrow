@@ -4,6 +4,13 @@ export interface Fragment {
   id: string;
   text: string;
   tags: Partial<Record<TagCategory, string[]>>;
+  /**
+   * Optional minimum player-graph node values required for this fragment to be eligible.
+   * If any requirement is not met, the fragment is excluded before scoring.
+   * Fragments without minNodes are always eligible (backward compatible).
+   * Example: { "animalSigns": 0.3 } — only shown when animalSigns >= 0.3.
+   */
+  minNodes?: Record<string, number>;
 }
 
 // --- Starter fragments: chalk ---

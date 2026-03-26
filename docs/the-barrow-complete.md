@@ -258,6 +258,8 @@ Beneath the surface, the game is a web of interlocking systems — a graph of ca
 
 **Body (Tier 0).** Shelter, Food, and Body Sense — the animal knowledge beneath thought. The backs of your knees in a sacred place. Body Sense connects directly to Sacred Places, bypassing three tiers. You can feel a thin place on day one.
 
+Each node in the Body and Land tiers has a float value that grows through qualifying actions — sheltering in varied conditions, foraging in new seasons, walking through different geologies, encountering animal traces, practising craft skills. Growth is gradual (0.005 to 0.02 per qualifying action) and the player never sees a number. They experience growth through the voice layer — the landscape literally reveals more as their nodes develop. A player with low Animal Signs sees empty ground; the same player months later sees deer tracks, otter slides, and birdsong patterns that tell them about the terrain ahead. The nodes interact: connected nodes reinforce each other, tarrying multiplies learning, and winter presses Shelter and Food downward so that survival is never fully solved.
+
 **Land (Tier 1).** Paths, Foraging, Weather Reading, Animal Signs, and Practice — embodied skill that improves through repetition.
 
 **People (Tier 2).** Encounter, Shared Language, Trade, Local Lore, and The Near Dead — the recently dead, whose graves are tended, whose loss is present.

@@ -280,6 +280,277 @@ Each skill improves through practice — doing the activity, repeatedly, over ti
 
 ---
 
+### 8A. Player Graph — Body and Land Tiers (Mechanical Specification)
+
+The player graph tracks capacities that develop through play. Each node has a float value (0.0 to 1.0) stored in the player state. Values increment in small amounts (0.005 to 0.02) per qualifying action, so growth is gradual — felt over sessions, not turns. No node value is ever displayed to the player (apart from in debug panels or views). The player experiences node growth through changes in the voice layer's descriptions, the appearance of new choices, and their character's increasing competence.
+
+#### 8A.1 Body Tier
+
+The Body tier is active from the first turn. These nodes affect survival and the player's physical relationship with the landscape.
+
+**Shelter (starts ~0.1)**
+
+*How it grows:*
+
+- Finding and using shelter: rock overhangs, abandoned benders, tree cover in rain, settlement shelter. Each sheltering event increments by 0.01–0.02.
+- Varied conditions accelerate growth. A player who has sheltered in rain, cold, wind, and snow gains more than one who only shelters in mild weather. Track a "conditions experienced" set; sheltering in a new condition type gives a bonus increment of 0.01.
+- Building a shelter (lean-to, improved rock shelter) gives a larger increment: 0.02–0.03.
+
+*Effects on the voice layer:*
+
+- Below 0.2: the voice layer does not mention shelter opportunities. The player walks past overhangs without noticing them.
+- 0.2 to 0.5: the voice layer occasionally mentions potential shelter. "The rock overhangs here. Dry ground beneath." These appear as observation fragments tagged with a shelter-awareness threshold.
+- 0.5 to 0.8: the player notices subtler opportunities. "The fallen oak has made a natural roof. Bracken for bedding, and the ground is dry." Descriptions include practical assessment — will this shelter hold in heavy rain? Is the wind blocked?
+- Above 0.8: shelter assessment is automatic and confident. "Good shelter here — the overhang faces south, the wind won't reach you, and there's firewood within arm's reach."
+
+*Effects on choices:*
+
+- Below 0.2: "Find shelter" appears as a generic choice in bad weather.
+- 0.2 to 0.5: specific shelter choices appear: "Shelter under the overhang." "Improve the rock shelter with bracken."
+- Above 0.5: more sophisticated choices: "Build a windbreak." "This spot would make a good camp — spend time improving it."
+
+*Effects on physical state:*
+
+- Higher Shelter reduces condition loss in bad weather. At Shelter 0.0, the player loses condition rapidly in rain and cold. At Shelter 0.8, the player finds adequate shelter almost anywhere and loses condition slowly even in harsh weather.
+
+*Graph connections:*
+
+- Feeds into Paths (understanding terrain helps you read where shelter exists).
+- Feeds into Weather (exposure teaches you to read the sky — see the "pressure" edge from Seasons).
+- Seasons presses down onto Shelter: in winter, even high Shelter is tested. The effective Shelter value is reduced in harsh seasons, meaning the player needs higher Shelter knowledge to maintain the same level of protection.
+
+---
+
+**Food (starts ~0.1)**
+
+*How it grows:*
+
+- Successfully foraging: finding and eating wild food. Each successful forage increments by 0.01.
+- Eating varied foods accelerates growth. Track a "foods eaten" set; each new food type gives a bonus increment of 0.01.
+- Seasonal discovery: finding a food source in a new season gives a larger increment (0.02) because seasonal food knowledge is distinct. A player who has only foraged in summer is missing half the picture.
+- Geology-specific: food knowledge gained on chalk doesn't fully transfer to granite. Track food familiarity per geology type. Finding food in a geology you haven't foraged in before gives a bonus.
+
+*Effects on the voice layer:*
+
+- Below 0.2: the landscape is green but featureless in terms of food. No food-related observations.
+- 0.2 to 0.4: the voice layer mentions food opportunities in passing. "Hazelnuts in the hedgerow, not ripe yet." "Blackberries thick on the sunny side of the path."
+- 0.4 to 0.7: descriptions include practical knowledge. "Sorrel growing thick at the stream edge. Good eating." "Wild garlic — the smell carries before you see it."
+- Above 0.7: the player reads the landscape as a food map. "This clearing has been grazed — deer come here at dusk. The droppings are fresh." "Crab apples in the hedge, past their best but the frost will have sweetened them."
+
+*Effects on choices:*
+
+- Below 0.2: "Look for food" is the only foraging choice and often fails.
+- 0.2 to 0.5: specific foraging choices appear based on geology and season: "Gather the hazelnuts." "Dig for roots at the stream bank."
+- Above 0.5: more choices, including preservation: "Dry these berries for later." "This meadowsweet — the wise woman would value it for trade."
+
+*Effects on physical state:*
+
+- Higher Food reduces hunger pressure. At Food 0.0, the player is frequently hungry and must dedicate significant time to finding food. At Food 0.7, the player knows where to find food in most terrains and seasons and rarely goes hungry unless conditions are extreme.
+
+*Graph connections:*
+
+- Feeds into Foraging (hunger drives you to learn to gather).
+- Feeds into Animal Signs (hunger makes you watch animals — where do they eat?).
+- Seasons presses down onto Food: winter reduces effective Food value, meaning even an experienced forager faces scarcity. The first winter is a crisis regardless of Food level.
+
+---
+
+**Body Sense (starts ~0.05)**
+
+*How it grows:*
+
+- Tarrying in any location: each tarry action increments Body Sense by 0.005. The quiet accumulation of bodily awareness through stillness.
+- Visiting sacred sites: entering a cell within 2 cells of a sacred site increments by 0.01. The body registers something even before the mind understands.
+- Entering cave-wight or small-folk territory: increments by 0.01. The feeling of being watched, the wrongness in the air.
+- Experiencing high-convergence moments: any time the convergence density exceeds a threshold, Body Sense increments by 0.01–0.02. The body learns from proximity to the liminal.
+- Experiencing altered states (exhaustion, fear, darkness, the wise woman's preparations): increments by 0.01.
+- Body Sense grows the slowest of all Body-tier nodes. It cannot be ground — it accumulates through presence and attention over a long time.
+
+*Effects on the voice layer:*
+
+- Below 0.1: no body-sense observations. Sacred sites are described physically but with no additional register.
+- 0.1 to 0.3: the voice layer adds faint physical sensations at appropriate locations. "Something in the air here. Hard to name." "The backs of your knees feel strange — as if the ground were not quite level, though it is."
+- 0.3 to 0.6: sensations are more specific and more reliable. "Your skin prickles. Not cold — something else. This place is not empty." "The wrongness you felt in the cave last month. You feel it here too, faintly."
+- Above 0.6: Body Sense becomes a reliable guide. "You know this feeling now. The ground is thin here — the membrane between what's above and what's below. Tread carefully." The voice layer can use body-sense observations to guide the player toward sacred sites and wight-territory edges they haven't yet found.
+
+*Effects on choices:*
+
+- Below 0.2: no body-sense choices.
+- 0.2 to 0.5: "Something feels different here. Stay and pay attention." appears at appropriate locations.
+- Above 0.5: more specific choices at liminal locations: "Follow the feeling — it's stronger to the east." "This is the place the wise woman described. You can feel it."
+
+*Graph connections:*
+
+- Connects directly to Sacred Places (tier 4) — the long arc that bypasses three tiers. This connection means that even at low overall progress, a player with moderate Body Sense has a physical response to sacred sites that foreshadows the deeper understanding available much later.
+- Feeds into Practice (the body learns through repetition).
+- Tarrying deepens Body Sense, creating the game's most important feedback loop: stillness → body awareness → noticing → deeper stillness.
+
+---
+
+#### 8A.2 Land Tier
+
+The Land tier develops through exploration and attention. These nodes make the landscape readable.
+
+**Paths (starts ~0.15)**
+
+*How it grows:*
+
+- Walking: every movement action increments Paths by 0.003. The most basic accumulation — you learn terrain by traversing it.
+- Following an actual path: increments by 0.005 per move on a path. Paths teach you what good routes look like.
+- Travelling through varied terrain: crossing from one geology type to another gives a bonus increment of 0.01. The player who stays on chalk learns chalk. The player who crosses geological boundaries learns terrain.
+- Reaching a summit or high point with a view: increments by 0.01. Seeing the landscape from above teaches you how it connects.
+
+*Effects on the voice layer:*
+
+- Below 0.2: basic directional descriptions. "The ground rises to the north."
+- 0.2 to 0.4: terrain-aware descriptions. "The ridge continues northeast — firmer ground, good walking." "A track through the bracken. Someone comes this way."
+- 0.4 to 0.7: the player reads the landscape as a map. "Animal trail heading downhill — probably to water." "The ground is worn here. A path, faint but real."
+- Above 0.7: sophisticated terrain reading. "This ridge connects to the escarpment you saw two days ago. If you follow it southeast, you should reach the river by nightfall." "The old trackway — you've been on this before, further north. It follows the geology boundary."
+
+*Effects on choices:*
+
+- Below 0.2: directional choices only: "Head north." "Head east."
+- 0.2 to 0.5: terrain-descriptive choices: "Follow the ridge northeast." "Descend into the valley." "Follow the river downstream."
+- Above 0.5: route-planning choices: "Take the high ground — you can see further." "Follow the animal trail — it probably leads to water." "The trackway should connect to the settlement path."
+
+*Graph connections:*
+
+- Feeds into Encounter (paths lead to people).
+- Weather feeds back into Paths (weather knowledge changes route choices).
+- Lore feeds back into Paths (stories reveal routes you didn't know).
+
+---
+
+**Foraging (starts ~0.05)**
+
+*How it grows:*
+
+- Successfully gathering plants, materials, useful things: increments by 0.01 per find.
+- Finding new species: bonus increment of 0.01 per first encounter with a plant type.
+- Seasonal and geological variety: finding resources in new season/geology combinations gives bonus increments.
+- Learning from NPCs with specialist knowledge (herbalist, wise woman): proximity to practitioners who forage gives a passive increment of 0.005 per visit.
+
+*Effects on the voice layer:*
+
+- Below 0.2: no plant-specific observations.
+- 0.2 to 0.4: the voice layer names common plants. "Nettles at the path edge." "Hazel catkins — not the right season for nuts."
+- 0.4 to 0.7: practical and seasonal knowledge. "Wild thyme on the chalk — good for cough, and it dries well." "These roots are best dug after frost."
+- Above 0.7: the landscape becomes a resource map. "Woundwort growing near the stream — rare this far north. Worth gathering." "The oak galls here are the right kind for ink. The wise woman would trade well for these."
+
+*Graph connections:*
+
+- Feeds into Encounter (gathering puts you where others gather).
+- Feeds into Trade (you have things others want).
+- Feeds into Craft (materials for making).
+- Moon feeds back into Foraging at higher tiers (herbs gathered at specific lunar phases).
+
+---
+
+**Weather (starts ~0.1)**
+
+*How it grows:*
+
+- Passively through exposure: each turn spent in weather other than "clear" increments by 0.003. Every weather event teaches you.
+- Being caught by weather changes: if weather changes while the player is exposed (not sheltered), increment by 0.01. Being surprised teaches you faster.
+- Surviving severe weather: a storm, heavy snow, or dangerous cold that the player weathers gives a larger increment of 0.02.
+- Seasonal exposure: experiencing weather in a new season gives a bonus. Winter weather teaches different things from summer weather.
+
+*Effects on the voice layer:*
+
+- Below 0.2: weather changes arrive without warning in the text.
+- 0.2 to 0.4: the voice layer adds hints before changes. "The wind has shifted. Cloud building to the west."
+- 0.4 to 0.7: specific predictions. "This wind means rain by evening. The air smells different — wet earth before the rain arrives."
+- Above 0.7: confident forecasting. "Two days of this, maybe three. The cloud base is dropping. Best find somewhere to wait it out." Weather descriptions become richer and more specific, showing the player's deep familiarity with the sky.
+
+*Effects on choices:*
+
+- Below 0.3: no weather-responsive choices.
+- 0.3 to 0.6: "The weather is turning — seek shelter" appears before weather changes.
+- Above 0.6: proactive choices: "The clearing tomorrow should be good for travel — press on now while the rain holds off." "Wait for the wind to shift — it'll be at your back by morning."
+
+*Graph connections:*
+
+- Feeds into Paths (weather knowledge changes route choices).
+- Animal Signs feeds into Weather (animals predict weather).
+- Shelter feeds into Weather (exposure teaches you to read the sky).
+
+---
+
+**Animal Signs (starts ~0.0)**
+
+*How it grows:*
+
+- Encountering animal traces: tracks, scat, calls, sightings. Each encounter increments by 0.01.
+- The animal distribution overlay drives what's available — high-deer areas produce more deer sign encounters.
+- Varied animal types: encountering a new species' signs gives a bonus increment of 0.01.
+- Tarrying in wild areas: staying still in areas with high animal density occasionally triggers sign-noticing events, incrementing by 0.005.
+- This node starts at zero because the player emerges from a barrow knowing nothing about the living landscape.
+
+*Effects on the voice layer:*
+
+- Below 0.1: no animal observations at all. The landscape is silent of animal presence.
+- 0.1 to 0.3: basic signs appear. "Tracks in the mud." "Something moving in the undergrowth."
+- 0.3 to 0.6: identified and interpreted. "Deer tracks, heading uphill. A doe with a fawn — the prints are close together." "Birdsong has stopped. Something disturbed them."
+- Above 0.6: deep reading. "The deer are moving east — unusual for this time of day. Something is pushing them. Wolves, maybe, or people." "An otter slide on the riverbank. The water is clean here — good fishing."
+
+*Effects on choices:*
+
+- Below 0.2: no animal-related choices.
+- 0.2 to 0.5: "Follow the tracks." "Watch the birds."
+- Above 0.5: "The deer trail leads to water — follow it." "The birdsong pattern tells you there's a clearing ahead." "Something large passed through here recently. Proceed with care."
+
+*Graph connections:*
+
+- Feeds into Weather (animals predict weather changes).
+- Feeds into Foraging (animals lead you to food sources).
+- Food feeds into Animal Signs (hunger makes you watch animals).
+
+---
+
+**Practice (separate value per activity, each starts 0.0)**
+
+Unlike other nodes, Practice is tracked per craft activity: shelter-building, fire-making, flint-knapping, woodworking, herb-gathering. Each has its own 0.0–1.0 value.
+
+*How it grows:*
+
+- Performing the activity: each attempt increments the relevant Practice counter by 0.005–0.01.
+- Successful attempts increment slightly more than failed ones (0.01 vs 0.005). You learn from failure, but success teaches more.
+- Practice grows with diminishing returns — the higher the value, the smaller the increment per attempt. Going from 0.0 to 0.3 is faster than going from 0.7 to 0.9.
+
+*Effects on the voice layer:*
+
+- Low Practice: attempts are described as clumsy. "You strike the flint. The edge crumbles."
+- Moderate: improvement is noted. "The flake comes away clean. Better than your last attempt."
+- High: confidence and quality. "A good edge. Sharp, even, the right angle for cutting."
+
+*Effects on gameplay:*
+
+- Practice values determine the quality of crafted outputs. Low flint-knapping produces crude tools. High produces fine blades with trade value.
+- Practice values affect success rates. Low fire-making Practice means fire-starting often fails, especially in wet conditions. High means reliable fire in most conditions.
+- Practice feeds into Craft at the Roots tier, where quality becomes identity.
+
+*Graph connections:*
+
+- Body Sense feeds into Practice (the body learns through repetition).
+- Practice feeds into Craft (skill determines quality).
+- Practice creates the time-versus-breadth tension: time spent practising flint-knapping is time not spent travelling or building relationships.
+
+---
+
+#### 8A.3 Node Interaction Rules
+
+Nodes don't just accumulate independently. They interact:
+
+**Cross-node bonuses.** When two connected nodes both exceed a threshold, the lower one gets a small bonus increment on qualifying actions. Example: when both Shelter and Weather exceed 0.3, Weather-qualifying actions get a +0.003 bonus because understanding shelter and understanding weather reinforce each other.
+
+**Seasonal modifiers.** In winter, Shelter and Food effective values are reduced by 0.1–0.2 (they don't lose actual value, but the thresholds for voice-layer effects shift upward). This is the Seasons-pressing-downward mechanic. A player with Food 0.5 effectively operates at Food 0.3–0.4 in winter — still capable but feeling the pressure.
+
+**Tarrying multiplier.** When the player tarries, any node that would normally increment from the current situation gets a 1.5x multiplier. Staying still and paying attention accelerates all learning. This is the mechanical expression of "attention is the primary currency."
+
+**Description budget.** The voice layer doesn't dump all node-gated observations into every description. It has a budget — typically one node-gated observation per turn, selected by relevance and novelty. If the player is near water and has moderate Foraging and moderate Animal Signs, the voice layer picks the more relevant observation (Foraging if they're hungry, Animal Signs if tracks are fresh) rather than both. This prevents descriptions from becoming checklists.
+
+---
+
 ### 9. Identity State
 
 The accumulated identity markers that the world reads.

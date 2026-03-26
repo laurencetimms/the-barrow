@@ -1,10 +1,11 @@
 import { Fragment } from "./fragments";
 import BUNDLED_FRAGMENTS from "./fragments.json";
+import NODE_GATED_FRAGMENTS from "./node-gated-fragments.json";
 
 const API_KEY_STORAGE = "barrow-voice-api-key";
 
 export function loadFragments(): Fragment[] {
-  return BUNDLED_FRAGMENTS as Fragment[];
+  return [...BUNDLED_FRAGMENTS, ...NODE_GATED_FRAGMENTS] as Fragment[];
 }
 
 export function saveFragments(_fragments: Fragment[]): void {

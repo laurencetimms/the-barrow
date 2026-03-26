@@ -84,3 +84,18 @@ Transition moment (1-2 sentences): environmental variable changed (weather, time
 Reorientation (brief): player absent >2min, page clears with reminder
 
 Directional choices ("continue north along the ridge") initiate travel sequences — the game moves the player cell by cell, checking for interrupt conditions (geology change, river crossing, feature sighting, weather shift). If interrupted, travel stops and the appropriate description mode fires. If not interrupted, the player covers 2-5 cells and gets a compressed travel narrative.
+
+## The Player Graph
+
+The player graph nodes (Body and Land tiers) are float values in the game state, tracked in `packages/game/src/player-graph.ts`. Each node has: a current value, increment rules (what actions cause it to grow), threshold effects (what the voice layer reveals at different levels), and choice gates (what options appear at different levels). Node values are NEVER displayed to the player. They are visible only in the debug panel. The voice layer reads node values to determine which observation fragments are eligible for the current description — fragments are tagged with minimum node thresholds, and the matcher filters by these thresholds before scoring.
+
+**Body tier nodes:** Shelter, Food, Body Sense. Active from turn one. Affect survival and physical relationship with the landscape.
+
+**Land tier nodes:** Paths, Foraging, Weather, Animal Signs, Practice (per-activity: shelter-building, fire-making, flint-knapping, woodworking, herb-gathering). Develop through exploration and attention.
+
+Key rules:
+- Growth is 0.005–0.02 per qualifying action. Never instant.
+- Tarrying gives a 1.5x multiplier to all node increments from the current situation.
+- In winter, Shelter and Food effective values are reduced by 0.1–0.2 (thresholds shift upward — the actual stored value does not decrease).
+- The voice layer applies a description budget: one node-gated observation per turn, selected by relevance and novelty. Fragments tagged with node thresholds are filtered by the matcher before scoring.
+- Connected nodes reinforce each other when both exceed a threshold (cross-node bonus increments).

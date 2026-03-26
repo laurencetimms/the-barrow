@@ -8,6 +8,7 @@ import type { TerrainMap, TerrainCell } from "@the-barrow/terrain";
 import { GeologyType, GEOLOGY_INFO } from "@the-barrow/terrain";
 import type { WorldQuery } from "./world";
 import { getMaxDistance } from "./travel";
+import type { PlayerGraph } from "./player-graph";
 
 export interface Choice {
   id:       string;
@@ -160,13 +161,15 @@ function travelChoiceText(startCell: TerrainCell, look: LookAhead): string {
 // ─── Main export ─────────────────────────────────────────────────
 
 export function generateChoices(
-  world:   WorldQuery,
-  terrain: TerrainMap,
-  x:       number,
-  y:       number,
+  world:       WorldQuery,
+  terrain:     TerrainMap,
+  x:           number,
+  y:           number,
+  playerGraph?: PlayerGraph,
 ): Choice[] {
   const choices: Choice[] = [];
   const startCell = terrain.cells[y][x];
+  const graph = playerGraph;
 
   // ── Immediate choices for adjacent rivers ─────────────────────
   // (settlements/sacred sites will be added when habitation layer is integrated)
@@ -221,6 +224,88 @@ export function generateChoices(
       timeCost: 1, // placeholder — actual cost determined by travel sequence
       travel:   true,
     });
+  }
+
+  // ── Node-gated choices ────────────────────────────────────────
+  // These only appear when the player's graph values exceed the threshold.
+  if (graph) {
+    const shelter    = graph.shelter.value;
+    const foraging   = graph.foraging.value;
+    const animalS    = graph.animalSigns.value;
+    const weather    = graph.weather.value;
+    const bodySense  = graph.bodySense.value;
+
+    // Shelter awareness: notice rock overhangs or dense cover
+    if (shelter >= 0.2) {
+      const hasRockGeo  = ["chalk", "limestone", "slate", "granite"].includes(startCell.geology);
+      const isHighEnough = startCell.altitude > 0.3;
+      if (hasRockGeo && isHighEnough) {
+        choices.push({
+          id:       "shelter-overhang",
+          text:     "Shelter under the overhang",
+          dx:       0,
+          dy:       0,
+          timeCost: 1,
+          travel:   false,
+        });
+      }
+    }
+
+    // Foraging awareness: gather herbs/plants
+    if (foraging >= 0.2) {
+      const foragingGeo = ["chalk", "limestone", "clay", "slate", "sandstone"];
+      if (foragingGeo.includes(startCell.geology)) {
+        choices.push({
+          id:       "forage-herbs",
+          text:     "Gather the herbs",
+          dx:       0,
+          dy:       0,
+          timeCost: 1,
+          travel:   false,
+        });
+      }
+    }
+
+    // Animal signs: follow tracks in animal-dense terrain
+    if (animalS >= 0.3) {
+      const denseGeo = ["clay", "limestone", "slate", "chalk"];
+      if (denseGeo.includes(startCell.geology)) {
+        choices.push({
+          id:       "follow-animal-trail",
+          text:     "Follow the animal trail",
+          dx:       0,
+          dy:       0,
+          timeCost: 1,
+          travel:   false,
+        });
+      }
+    }
+
+    // Weather reading: anticipate incoming weather
+    if (weather >= 0.4 && world.adjacentTerrain.length > 0) {
+      choices.push({
+        id:       "seek-shelter-weather",
+        text:     "The weather is turning — seek shelter before it arrives",
+        dx:       0,
+        dy:       0,
+        timeCost: 1,
+        travel:   false,
+      });
+    }
+
+    // Body sense: pay attention at liminal locations
+    if (bodySense >= 0.2 && world.nearbyFeatures.some(
+      f => (f.type === "standing-stone" || f.type === "barrow") && f.distance <= 3,
+    )) {
+      choices.push({
+        id:       "attend-body-sense",
+        text:     "Something feels different here. Stay and pay attention.",
+        dx:       0,
+        dy:       0,
+        timeCost: 1,
+        travel:   false,
+      });
+    }
   }
 
   // ── Wait — always last ─────────────────────────────────────────
