@@ -135,6 +135,15 @@ async function enforcePageCapacity(newText: string): Promise<void> {
   }
 }
 
+/** Sort matched fragments so movement fragments precede non-movement ones. */
+function sortMatchedFragments<T extends { fragment: { tags: Record<string, string[]> } }>(matched: T[]): T[] {
+  return [...matched].sort((a, b) => {
+    const aIsMovement = (a.fragment.tags["state"] ?? []).includes("movement") ? 0 : 1;
+    const bIsMovement = (b.fragment.tags["state"] ?? []).includes("movement") ? 0 : 1;
+    return aIsMovement - bIsMovement;
+  });
+}
+
 /** Format matched fragment metadata for debug display. */
 function formatFragMeta(matched: { fragment: { id: string; tags: Record<string, string[]> }; score: number }[]): string {
   const parts = matched.map(m => {
@@ -334,7 +343,7 @@ async function generateOpeningDescription(): Promise<{ text: string; fragmentIds
 
   const world     = queryWorld(terrain, gameState.position.x, gameState.position.y);
   const situation = buildSituation(world, gameState);
-  const matched   = matchFragments(fragments, situation, 4, gameState.recentFragmentIds);
+  const matched   = sortMatchedFragments(matchFragments(fragments, situation, 4, gameState.recentFragmentIds));
   const apiKey    = loadApiKey();
   const ids       = matched.map(m => m.fragment.id);
 
@@ -489,7 +498,7 @@ async function renderTravelTurn(
     "movement",
   ];
 
-  const travelMatched   = matchFragments(fragments, travelSituation, FRAGMENT_COUNTS["travel"], gameState.recentFragmentIds);
+  const travelMatched   = sortMatchedFragments(matchFragments(fragments, travelSituation, FRAGMENT_COUNTS["travel"], gameState.recentFragmentIds));
   const notableStr      = result.notables.join(", ");
   const apiKey          = loadApiKey();
 
@@ -564,7 +573,7 @@ async function renderTravelTurn(
 
   const arrivalSituation   = buildSituation(world, gameState);
   const totalScored        = countScoredFragments(fragments, arrivalSituation);
-  const arrivalMatched     = matchFragments(fragments, arrivalSituation, FRAGMENT_COUNTS[arrivalMode], gameState.recentFragmentIds);
+  const arrivalMatched     = sortMatchedFragments(matchFragments(fragments, arrivalSituation, FRAGMENT_COUNTS[arrivalMode], gameState.recentFragmentIds));
   const arrivalInstruction = getModeInstruction(arrivalMode, gameState.tarryCount);
 
   let arrivalLoadingP: HTMLParagraphElement | null = null;
@@ -634,7 +643,7 @@ async function renderTurn(decisionMs: number): Promise<void> {
 
   const situation    = buildSituation(world, gameState);
   const totalScored  = countScoredFragments(fragments, situation);
-  const matched      = matchFragments(fragments, situation, fragCount, gameState.recentFragmentIds);
+  const matched      = sortMatchedFragments(matchFragments(fragments, situation, fragCount, gameState.recentFragmentIds));
   const apiKey      = loadApiKey();
   const instruction = getModeInstruction(mode, gameState.tarryCount, transitionWhat);
 
