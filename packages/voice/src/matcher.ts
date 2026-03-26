@@ -18,7 +18,15 @@ function scoreFragment(fragment: Fragment, situation: Situation): number {
     const sitTags = situation[cat];
     const fragTags = fragment.tags[cat];
 
-    if (!sitTags || sitTags.length === 0) continue;
+    if (!sitTags || sitTags.length === 0) {
+      // Hard-exclusion categories: if fragment has tags but situation doesn't,
+      // exclude the fragment — better to show nothing than a mismatched fragment.
+      if (fragTags && fragTags.length > 0 &&
+          (cat === "geology" || cat === "weather" || cat === "season" || cat === "time")) {
+        return 0;
+      }
+      continue;
+    }
     if (!fragTags || fragTags.length === 0) continue;
 
     // Check for overlap

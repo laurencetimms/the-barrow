@@ -32,9 +32,11 @@ export function buildSituation(world: WorldQuery, state: GameState): Situation {
     state: [],
   };
 
-  // Geology
-  const geoTag = GEOLOGY_TO_TAG[world.cell.geology];
-  if (geoTag) situation.geology.push(geoTag);
+  // Geology — always push something so the matcher's geology check fires.
+  // Unknown types (water, ice) fall back to their raw geology string,
+  // which won't match any fragment tag and correctly excludes everything.
+  const geoTag = GEOLOGY_TO_TAG[world.cell.geology] ?? world.cell.geology;
+  situation.geology.push(geoTag);
 
   // Weather
   situation.weather.push(state.weather.type);
