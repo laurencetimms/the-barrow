@@ -135,15 +135,35 @@ async function enforcePageCapacity(newText: string): Promise<void> {
   }
 }
 
+/** Format matched fragment metadata for debug display. */
+function formatFragMeta(matched: { fragment: { id: string; tags: Record<string, string[]> }; score: number }[]): string {
+  const parts = matched.map(m => {
+    const tagParts = Object.entries(m.fragment.tags)
+      .filter(([, vals]) => vals && vals.length > 0)
+      .map(([cat, vals]) => `${cat}:${vals.join(",")}`);
+    return [m.fragment.id, ...tagParts].join(", ");
+  });
+  return `[${parts.join(" · ")}]`;
+}
+
 function appendText(
   text: string,
   className?: string,
   marginTopPx?: number,
+  fragMeta?: string,
 ): HTMLParagraphElement {
   const p = document.createElement("p");
   if (className)             p.className    = className;
   if (marginTopPx !== undefined) p.style.marginTop = `${marginTopPx}px`;
-  p.textContent  = text;
+  if (fragMeta) {
+    const metaSpan = document.createElement("span");
+    metaSpan.className   = "frag-meta";
+    metaSpan.textContent = fragMeta + " ";
+    p.appendChild(metaSpan);
+    p.appendChild(document.createTextNode(text));
+  } else {
+    p.textContent = text;
+  }
   p.style.opacity = "0";
   textPanel.appendChild(p);
   requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -504,7 +524,7 @@ async function renderTravelTurn(
   }
   travelLoadingP?.remove();
   await enforcePageCapacity(travelDescription);
-  appendText(travelDescription, undefined, 20);
+  appendText(travelDescription, undefined, 20, travelMatched.length > 0 ? formatFragMeta(travelMatched) : undefined);
 
   gameState.recentDescriptions = [travelDescription, ...gameState.recentDescriptions].slice(0, 3);
   gameState.recentFragmentIds  = [...travelMatched.map(m => m.fragment.id), ...gameState.recentFragmentIds].slice(0, 15);
@@ -572,7 +592,7 @@ async function renderTravelTurn(
 
   arrivalLoadingP?.remove();
   if (arrivalMode !== "full") await enforcePageCapacity(arrivalDescription);
-  appendText(arrivalDescription, undefined, arrivalMode === "full" ? undefined : 20);
+  appendText(arrivalDescription, undefined, arrivalMode === "full" ? undefined : 20, arrivalMatched.length > 0 ? formatFragMeta(arrivalMatched) : undefined);
 
   gameState.prevContext         = currContext;
   gameState.recentDescriptions  = [arrivalDescription, ...gameState.recentDescriptions].slice(0, 3);
@@ -648,7 +668,7 @@ async function renderTurn(decisionMs: number): Promise<void> {
   loadingP?.remove();
   if (!behavior.shouldClear) await enforcePageCapacity(description);
 
-  appendText(description, undefined, behavior.shouldClear ? undefined : behavior.appendMarginPx);
+  appendText(description, undefined, behavior.shouldClear ? undefined : behavior.appendMarginPx, matched.length > 0 ? formatFragMeta(matched) : undefined);
 
   gameState.prevContext        = currContext;
   gameState.recentDescriptions = [description, ...gameState.recentDescriptions].slice(0, 3);
